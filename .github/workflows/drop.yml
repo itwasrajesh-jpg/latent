@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
     paths:
+      - '*.zip'
       - 'drop/*.zip'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,10 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Unpack every zip in drop/
+      - name: Unpack every zip (repo root or drop/)
         run: |
           shopt -s nullglob
-          for z in drop/*.zip; do
+          for z in *.zip drop/*.zip; do
             echo "Unpacking $z"
             if unzip -l "$z" | grep -q '\.github/workflows/'; then
               echo "::warning::$z contains workflow files; skipped (edit workflows by hand)"
