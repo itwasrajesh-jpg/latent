@@ -86,8 +86,10 @@ private fun Root() {
             onChange = { s -> settings = s; AppSettings.save(context, s) },
             onOpenReport = { screen = "report" },
             onOpenVendor = { screen = "vendor" },
+            onOpenProbe = { screen = "probe" },
             onBack = { screen = "camera" },
         )
+        "probe" -> ProbeScreen(settings = settings, onBack = { screen = "settings" })
         "vendor" -> VendorScreen(
             settings = settings,
             exposedKeys = controllerRef?.exposedVendorKeys() ?: emptyList(),
