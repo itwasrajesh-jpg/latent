@@ -46,6 +46,14 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent { LatentTheme { Root() } }
     }
+
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP || keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN) {
+            val f = ShutterBus.onShutter
+            if (f != null) { if (event?.repeatCount == 0) f(); return true }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
 }
 
 @Composable
@@ -55,7 +63,8 @@ private fun Root() {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
     val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> granted = ok }
-    var showReport by remember { mutableStateOf(false) }
+    var screen by remember { mutableStateOf("camera") }
+    var settings by remember { mutableStateOf(AppSettings.load(context)) }
 
     if (!granted) {
         Column(Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().padding(24.dp)) {
@@ -68,7 +77,20 @@ private fun Root() {
         }
         return
     }
-    if (showReport) ReportScreen(onBack = { showReport = false }) else CameraScreen(onOpenReport = { showReport = true })
+    when (screen) {
+        "report" -> ReportScreen(onBack = { screen = "settings" })
+        "settings" -> SettingsScreen(
+            settings = settings,
+            onChange = { s -> settings = s; AppSettings.save(context, s) },
+            onOpenReport = { screen = "report" },
+            onBack = { screen = "camera" },
+        )
+        else -> CameraScreen(
+            settings = settings,
+            onOpenSettings = { screen = "settings" },
+            onLensChanged = { l -> if (settings.rememberLens) { settings = settings.copy(defaultLensId = l.physicalId); AppSettings.save(context, settings) } },
+        )
+    }
 }
 
 @Composable

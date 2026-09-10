@@ -61,6 +61,9 @@ class CameraController(
     private var previewSurface: Surface? = null
     private var lens: Lens = Lenses.DEFAULT
     private var directOpen = false
+    /** User preference: open the physical lens by its own ID instead of via logical camera 0. */
+    @Volatile var preferDirectOpen = false
+    private var fallbackDirect = false
     private lateinit var physChars: CameraCharacteristics
     private var rawSize = Size(4096, 3072)
 
@@ -80,6 +83,7 @@ class CameraController(
     private var afRegion: MeteringRectangle? = null
     private var afTriggerPending = false
     private var frameCounter = 0
+    @Volatile var antibanding: Int = CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_AUTO
 
     /** Ranges of the current lens, for the sliders. */
     val shutterRange: Range<Long> get() = physChars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) ?: Range(100_000L, 1_000_000_000L)
@@ -93,7 +97,7 @@ class CameraController(
     fun previewSizeFor(lens: Lens): Size {
         val ch = cm.getCameraCharacteristics(lens.physicalId)
         val map = ch.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
-        val sizes = map.getOutputSizes(android.view.SurfaceHolder::class.java)
+        val sizes = map.getOutputSizes(android.graphics.SurfaceTexture::class.java)
         return sizes.filter { it.width * 3 == it.height * 4 && it.width <= 1920 }.maxByOrNull { it.width } ?: Size(1440, 1080)
     }
 
@@ -104,6 +108,7 @@ class CameraController(
             closeInternal()
             this.lens = lens
             this.previewSurface = surface
+            directOpen = preferDirectOpen || fallbackDirect
             physChars = cm.getCameraCharacteristics(lens.physicalId)
             afRegion = null; afTriggerPending = false; lastTransform = null; lastGains = null
             val map = physChars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
@@ -140,7 +145,7 @@ class CameraController(
             override fun onConfigureFailed(s: CameraCaptureSession) {
                 if (!directOpen) {
                     log("session via logical camera failed; retrying with direct open of ${lens.physicalId}")
-                    directOpen = true
+                    fallbackDirect = true
                     val surf = previewSurface!!
                     handler.post { open(lens, surf) }
                 } else status("Session configuration failed for ${lens.name}")
@@ -149,7 +154,7 @@ class CameraController(
         try { dev.createCaptureSession(config) } catch (e: Exception) {
             if (!directOpen) {
                 log("createCaptureSession threw (${e.message}); retrying with direct open of ${lens.physicalId}")
-                directOpen = true
+                fallbackDirect = true
                 val surf = previewSurface!!
                 handler.post { open(lens, surf) }
             } else status("createCaptureSession: ${e.message}")
@@ -187,20 +192,48 @@ class CameraController(
     }
 
     fun setControls(c: Controls) = handler.post { controls = c; updatePreview() }
+    fun setAntibanding(mode: Int) = handler.post { antibanding = mode; updatePreview() }
 
-    /** Tap-to-focus. u,v are 0..1 across the portrait viewfinder (u right, v down). */
-    fun tapFocus(u: Float, v: Float) = handler.post {
-        val active = physChars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return@post
-        // Sensor is mounted 90° clockwise: viewfinder x runs along sensor y (inverted), viewfinder y along sensor x.
-        val sx = v.coerceIn(0f, 1f); val sy = (1f - u).coerceIn(0f, 1f)
-        val half = 0.07f
+    /** Viewfinder point (u right, v down, both 0..1) -> metering rectangle in sensor coordinates. */
+    private fun regionFor(u: Float, v: Float): MeteringRectangle? {
+        val active = physChars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return null
+        val orientation = physChars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+        // Undo the sensor->display rotation. 90: display (u,v) came from sensor (x=v, y=1-u).
+        val (sx, sy) = when (orientation) {
+            90 -> v to (1f - u)
+            270 -> (1f - v) to u
+            180 -> (1f - u) to (1f - v)
+            else -> u to v
+        }
+        val half = 0.06f
         val l = ((sx - half) * active.width()).toInt().coerceIn(0, active.width() - 2)
         val t = ((sy - half) * active.height()).toInt().coerceIn(0, active.height() - 2)
         val w = (2 * half * active.width()).toInt().coerceAtLeast(2).coerceAtMost(active.width() - l)
         val h = (2 * half * active.height()).toInt().coerceAtLeast(2).coerceAtMost(active.height() - t)
-        afRegion = MeteringRectangle(l, t, w, h, MeteringRectangle.METERING_WEIGHT_MAX - 1)
+        val r = MeteringRectangle(l, t, w, h, MeteringRectangle.METERING_WEIGHT_MAX - 1)
+        log("AF region for tap (%.2f, %.2f) -> sensor [%d,%d %dx%d] of %dx%d, orientation %d".format(u, v, l, t, w, h, active.width(), active.height(), orientation))
+        return r
+    }
+
+    /** Tap-to-focus. Also clears any AE/AF lock. */
+    fun tapFocus(u: Float, v: Float) = handler.post {
+        afRegion = regionFor(u, v) ?: return@post
         afTriggerPending = true
-        controls = controls.copy(focusDiopters = null)
+        controls = controls.copy(focusDiopters = null, locked = false)
+        updatePreview()
+    }
+
+    /** Long-press: focus at the point, then lock exposure and hold focus there. */
+    fun lockAt(u: Float, v: Float) = handler.post {
+        afRegion = regionFor(u, v) ?: return@post
+        afTriggerPending = true
+        controls = controls.copy(focusDiopters = null, locked = true)
+        updatePreview()
+    }
+
+    fun unlock() = handler.post {
+        afRegion = null
+        controls = controls.copy(locked = false)
         updatePreview()
     }
 
@@ -219,7 +252,11 @@ class CameraController(
         } else {
             b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
             b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, c.evIndex.coerceIn(evRange.lower, evRange.upper))
+            b.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, antibanding)
+            b.set(CaptureRequest.CONTROL_AE_LOCK, c.locked)
         }
+        // Keep the preview and still pipelines identical so a capture does not visibly re-configure anything.
+        b.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON)
         // White balance
         val k = c.kelvin
         if (k != null) {
@@ -229,6 +266,7 @@ class CameraController(
             b.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, lastTransform ?: ColorSpaceTransform(intArrayOf(1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1)))
         } else {
             b.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
+            b.set(CaptureRequest.CONTROL_AWB_LOCK, c.locked)
         }
         // Focus
         val f = c.focusDiopters
@@ -260,11 +298,22 @@ class CameraController(
             }
             if (++frameCounter % 6 == 0) {
                 val gains = lastGains
+                val af = when (r.get(CaptureResult.CONTROL_AF_STATE)) {
+                    CameraMetadata.CONTROL_AF_STATE_INACTIVE -> "inactive"
+                    CameraMetadata.CONTROL_AF_STATE_PASSIVE_SCAN -> "scanning"
+                    CameraMetadata.CONTROL_AF_STATE_PASSIVE_FOCUSED -> "focused"
+                    CameraMetadata.CONTROL_AF_STATE_ACTIVE_SCAN -> "scanning*"
+                    CameraMetadata.CONTROL_AF_STATE_FOCUSED_LOCKED -> "locked ✓"
+                    CameraMetadata.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> "locked ✗"
+                    CameraMetadata.CONTROL_AF_STATE_PASSIVE_UNFOCUSED -> "unfocused"
+                    else -> "?"
+                }
                 onReadout(LiveReadout(
                     shutterNs = r.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0,
                     iso = r.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0,
                     focusDiopters = r.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f,
                     kelvinEstimate = if (gains != null && frameCounter % 30 == 0) ControlMath.kelvinForGains(physChars, gains) else -1,
+                    afState = af,
                 ))
             }
         }
@@ -276,9 +325,6 @@ class CameraController(
             addTarget(rawReader!!.surface)
             previewSurface?.let { addTarget(it) }
             applyControls(this)
-            // Ask for the lens shading map so the DNG carries the vignetting correction (like Xiaomi's files).
-            set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON)
-            set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_OFF)
         }
     }
 

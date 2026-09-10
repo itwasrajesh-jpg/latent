@@ -1,0 +1,117 @@
+@file:OptIn(ExperimentalFoundationApi::class)
+
+package com.celestial.latent
+
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.celestial.latent.camera.Lenses
+import com.celestial.latent.ui.LatentColors
+
+@Composable
+fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpenReport: () -> Unit, onBack: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().navigationBarsPadding()
+            .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
+    ) {
+        Text("‹ back", color = LatentColors.Text, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onBack).padding(vertical = 6.dp))
+        Spacer(Modifier.height(8.dp))
+        Text("Settings", color = LatentColors.TextBright, fontSize = 24.sp)
+        Spacer(Modifier.height(20.dp))
+
+        Section("Exposure")
+        OptionRow(
+            title = "Anti-banding",
+            subtitle = "Avoids flicker from mains-powered lights. India is 50 Hz. Only acts while shutter is automatic; with a manual shutter, pick 1/50, 1/100 or slower.",
+            options = listOf("Auto" to AppSettings.ANTIBANDING_AUTO, "50 Hz" to AppSettings.ANTIBANDING_50HZ, "60 Hz" to AppSettings.ANTIBANDING_60HZ, "Off" to AppSettings.ANTIBANDING_OFF),
+            selected = settings.antibanding,
+        ) { onChange(settings.copy(antibanding = it)) }
+
+        Section("Viewfinder")
+        ToggleRow("Gridlines", "Rule-of-thirds lines over the preview", settings.gridlines) { onChange(settings.copy(gridlines = it)) }
+
+        Section("Shooting")
+        ToggleRow("Volume buttons take the photo", "Either volume key acts as the shutter", settings.volumeShutter) { onChange(settings.copy(volumeShutter = it)) }
+        ToggleRow("Remember last lens", "Open on the lens you used last time", settings.rememberLens) { onChange(settings.copy(rememberLens = it)) }
+        OptionRow(
+            title = "Default lens",
+            subtitle = "Used when the app opens (if not remembering the last one)",
+            options = Lenses.ALL.map { it.label to it.physicalId },
+            selected = settings.defaultLensId,
+        ) { onChange(settings.copy(defaultLensId = it)) }
+
+        Section("Diagnostics")
+        ToggleRow("Open lenses directly", "Experimental: open each lens by its own ID instead of through camera 0. Try this if tap-to-focus ignores where you tap. Takes effect on next lens switch.", settings.directOpen) { onChange(settings.copy(directOpen = it)) }
+        Text("Camera report ›", color = LatentColors.Amber, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onOpenReport).padding(vertical = 10.dp))
+
+        Spacer(Modifier.height(24.dp))
+        Text("Latent v" + BuildConfig.VERSION_NAME + " · film modeling will be powered by spektrafilm", color = LatentColors.TextDim, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun Section(title: String) {
+    Spacer(Modifier.height(14.dp))
+    Text(title.uppercase(), color = LatentColors.TextDim, fontSize = 11.sp, letterSpacing = 2.sp)
+    Spacer(Modifier.height(6.dp))
+}
+
+@Composable
+private fun ToggleRow(title: String, subtitle: String, value: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = LatentColors.TextBright, fontSize = 15.sp)
+            Text(subtitle, color = LatentColors.TextDim, fontSize = 12.sp)
+        }
+        Switch(
+            checked = value, onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(checkedThumbColor = LatentColors.AmberInk, checkedTrackColor = LatentColors.Amber, uncheckedThumbColor = LatentColors.Text, uncheckedTrackColor = LatentColors.Surface),
+        )
+    }
+}
+
+@Composable
+private fun <T> OptionRow(title: String, subtitle: String, options: List<Pair<String, T>>, selected: T, onSelect: (T) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+        Text(title, color = LatentColors.TextBright, fontSize = 15.sp)
+        Text(subtitle, color = LatentColors.TextDim, fontSize = 12.sp)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.forEach { (label, v) ->
+                val on = v == selected
+                Text(
+                    label,
+                    color = if (on) LatentColors.AmberInk else LatentColors.Text,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(if (on) LatentColors.Amber else LatentColors.Surface)
+                        .combinedClickable(onClick = { onSelect(v) })
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                )
+            }
+        }
+    }
+}

@@ -15,6 +15,7 @@ data class Controls(
     val iso: Int? = null,             // manual sensitivity, or null for auto
     val kelvin: Int? = null,          // manual white balance, or null for auto
     val focusDiopters: Float? = null, // manual focus (0 = infinity), or null for autofocus
+    val locked: Boolean = false,      // AE/AF lock (long-press on the viewfinder)
 ) {
     val manualExposure get() = shutterNs != null || iso != null
 }
@@ -25,6 +26,7 @@ data class LiveReadout(
     val iso: Int = 0,
     val focusDiopters: Float = 0f,
     val kelvinEstimate: Int = 0,
+    val afState: String = "",
 )
 
 object ControlMath {

@@ -2,12 +2,14 @@
 
 package com.celestial.latent
 
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import android.graphics.SurfaceTexture
+import android.view.Surface
+import android.view.TextureView
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -60,11 +63,12 @@ import kotlinx.coroutines.delay
 private enum class Cell { EV, S, ISO, WB, F }
 
 @Composable
-fun CameraScreen(onOpenReport: () -> Unit) {
+fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChanged: (Lens) -> Unit) {
     val context = LocalContext.current
     var status by remember { mutableStateOf("Starting camera…") }
     var log by remember { mutableStateOf("") }
-    var lens by remember { mutableStateOf(Lenses.DEFAULT) }
+    val startLens = remember { Lenses.ALL.firstOrNull { it.physicalId == settings.defaultLensId } ?: Lenses.DEFAULT }
+    var lens by remember { mutableStateOf(startLens) }
     var readout by remember { mutableStateOf(LiveReadout()) }
     var kelvinShown by remember { mutableStateOf(0) }
     var controls by remember { mutableStateOf(Controls()) }
@@ -80,9 +84,14 @@ fun CameraScreen(onOpenReport: () -> Unit) {
             onReadout = { r -> readout = r; if (r.kelvinEstimate > 0) kelvinShown = r.kelvinEstimate },
         )
     }
-    var holderRef by remember { mutableStateOf<SurfaceHolder?>(null) }
+    var surfaceRef by remember { mutableStateOf<Surface?>(null) }
 
-    DisposableEffect(Unit) { onDispose { controller.destroy() } }
+    DisposableEffect(Unit) {
+        ShutterBus.onShutter = { if (settings.volumeShutter) controller.captureSingle() }
+        onDispose { ShutterBus.onShutter = null; controller.destroy() }
+    }
+    LaunchedEffect(settings.antibanding) { controller.setAntibanding(settings.antibanding) }
+    LaunchedEffect(settings.directOpen) { controller.preferDirectOpen = settings.directOpen }
     LaunchedEffect(focusTapAt) { if (focusTapAt > 0) { delay(1500); focusTap = null } }
 
     fun push(c: Controls) { controls = c; controller.setControls(c) }
@@ -97,7 +106,7 @@ fun CameraScreen(onOpenReport: () -> Unit) {
         ) {
             Text("LATENT", color = LatentColors.Text, fontSize = 13.sp, letterSpacing = 4.sp, fontWeight = FontWeight.Light)
             Text("12.5M · RAW · v" + BuildConfig.VERSION_NAME, color = LatentColors.TextDim, fontSize = 11.sp)
-            Text("report", color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.combinedClickable(onClick = onOpenReport))
+            Text("settings", color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.combinedClickable(onClick = onOpenSettings))
         }
 
         // Viewfinder: 3:4 box. Tap = focus at that point.
@@ -107,31 +116,52 @@ fun CameraScreen(onOpenReport: () -> Unit) {
                 .aspectRatio(3f / 4f)
                 .background(LatentColors.Surface)
                 .pointerInput(Unit) {
-                    detectTapGestures { pos ->
-                        focusTap = pos; focusTapAt = System.currentTimeMillis()
-                        controller.tapFocus(pos.x / size.width, pos.y / size.height)
-                        controls = controls.copy(focusDiopters = null)
-                    }
+                    detectTapGestures(
+                        onTap = { pos ->
+                            focusTap = pos; focusTapAt = System.currentTimeMillis()
+                            if (controls.locked) { controller.unlock() }
+                            controller.tapFocus(pos.x / size.width, pos.y / size.height)
+                            controls = controls.copy(focusDiopters = null, locked = false)
+                        },
+                        onLongPress = { pos ->
+                            focusTap = pos; focusTapAt = System.currentTimeMillis()
+                            controller.lockAt(pos.x / size.width, pos.y / size.height)
+                            controls = controls.copy(focusDiopters = null, locked = true)
+                        },
+                    )
                 },
         ) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
-                    SurfaceView(ctx).apply {
-                        holder.addCallback(object : SurfaceHolder.Callback {
-                            override fun surfaceCreated(h: SurfaceHolder) {
+                    // TextureView applies the camera's rotation transform itself, so the first
+                    // frame is drawn with the right geometry (SurfaceView got this wrong on launch).
+                    TextureView(ctx).apply {
+                        surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                            override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
                                 val size = controller.previewSizeFor(lens)
-                                h.setFixedSize(size.width, size.height)
-                                holderRef = h
-                                // Open one frame later so the display attaches its rotation first.
-                                post { if (holderRef === h) controller.open(lens, h.surface) }
+                                st.setDefaultBufferSize(size.width, size.height)
+                                val surf = Surface(st)
+                                surfaceRef = surf
+                                controller.open(lens, surf)
                             }
-                            override fun surfaceChanged(h: SurfaceHolder, format: Int, width: Int, height: Int) {}
-                            override fun surfaceDestroyed(h: SurfaceHolder) { holderRef = null; controller.close() }
-                        })
+                            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {}
+                            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { surfaceRef = null; controller.close(); return true }
+                            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                        }
                     }
                 },
             )
+            if (settings.gridlines) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val c = Color(0x66FFFFFF)
+                    val w = size.width; val h = size.height
+                    drawLine(c, Offset(w / 3, 0f), Offset(w / 3, h), 1f)
+                    drawLine(c, Offset(2 * w / 3, 0f), Offset(2 * w / 3, h), 1f)
+                    drawLine(c, Offset(0f, h / 3), Offset(w, h / 3), 1f)
+                    drawLine(c, Offset(0f, 2 * h / 3), Offset(w, 2 * h / 3), 1f)
+                }
+            }
             focusTap?.let { p ->
                 val d = LocalDensity.current
                 val boxPx = with(d) { 72.dp.toPx() }
@@ -143,10 +173,16 @@ fun CameraScreen(onOpenReport: () -> Unit) {
                 )
             }
             Text(
-                text = lens.name,
+                text = lens.name + (if (readout.afState.isNotEmpty()) " · AF " + readout.afState else ""),
                 color = LatentColors.Text, fontSize = 11.sp,
                 modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
             )
+            if (controls.locked) {
+                Text(
+                    "AE/AF LOCK", color = LatentColors.AmberInk, fontSize = 11.sp, letterSpacing = 1.sp,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(8.dp).clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+            }
         }
 
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center) {
@@ -156,7 +192,8 @@ fun CameraScreen(onOpenReport: () -> Unit) {
                         lens = l
                         // Manual values may be out of range on the new lens; go back to auto for exposure and focus.
                         push(controls.copy(shutterNs = null, iso = null, focusDiopters = null))
-                        holderRef?.let { h -> controller.open(l, h.surface) }
+                        onLensChanged(l)
+                        surfaceRef?.let { surf -> controller.open(l, surf) }
                     }
                 }
             }
