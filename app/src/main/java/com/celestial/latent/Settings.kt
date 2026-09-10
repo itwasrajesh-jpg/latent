@@ -11,6 +11,7 @@ data class AppSettings(
     val defaultLensId: String = Lenses.DEFAULT.physicalId,
     val rememberLens: Boolean = true,
     val directOpen: Boolean = false,
+    val saveJpeg: Boolean = false,      // RAW only, or RAW + JPEG side by side
 ) {
     companion object {
         const val ANTIBANDING_OFF = 0
@@ -29,6 +30,7 @@ data class AppSettings(
                 defaultLensId = p.getString("defaultLensId", Lenses.DEFAULT.physicalId) ?: Lenses.DEFAULT.physicalId,
                 rememberLens = p.getBoolean("rememberLens", true),
                 directOpen = p.getBoolean("directOpen", false),
+                saveJpeg = p.getBoolean("saveJpeg", false),
             )
         }
 
@@ -40,6 +42,7 @@ data class AppSettings(
                 .putString("defaultLensId", s.defaultLensId)
                 .putBoolean("rememberLens", s.rememberLens)
                 .putBoolean("directOpen", s.directOpen)
+                .putBoolean("saveJpeg", s.saveJpeg)
                 .apply()
         }
     }

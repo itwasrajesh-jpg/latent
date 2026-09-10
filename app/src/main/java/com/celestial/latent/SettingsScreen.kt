@@ -52,6 +52,14 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
         Section("Viewfinder")
         ToggleRow("Gridlines", "Rule-of-thirds lines over the preview", settings.gridlines) { onChange(settings.copy(gridlines = it)) }
 
+        Section("Files")
+        OptionRow(
+            title = "Format",
+            subtitle = "RAW is always saved. The JPEG is the camera driver's own processed copy, handy for sharing; it is not the film-developed result.",
+            options = listOf("RAW" to false, "RAW + JPEG" to true),
+            selected = settings.saveJpeg,
+        ) { onChange(settings.copy(saveJpeg = it)) }
+
         Section("Shooting")
         ToggleRow("Volume buttons take the photo", "Either volume key acts as the shutter", settings.volumeShutter) { onChange(settings.copy(volumeShutter = it)) }
         ToggleRow("Remember last lens", "Open on the lens you used last time", settings.rememberLens) { onChange(settings.copy(rememberLens = it)) }

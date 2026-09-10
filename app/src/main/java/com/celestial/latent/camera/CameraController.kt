@@ -58,6 +58,11 @@ class CameraController(
     private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var rawReader: ImageReader? = null
+    private var jpegReader: ImageReader? = null
+    @Volatile var saveJpeg = false
+    private val baseNames = HashMap<Long, String>()      // sensor timestamp -> file base name
+    private val pendingJpegs = HashMap<Long, ByteArray>() // JPEGs that arrived before their RAW was named
+    private var oisAvailable = false
     private var previewSurface: Surface? = null
     private var lens: Lens = Lenses.DEFAULT
     private var directOpen = false
@@ -116,6 +121,11 @@ class CameraController(
             rawReader = ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 6).also {
                 it.setOnImageAvailableListener({ r -> onRawImage(r) }, handler)
             }
+            val jpegSize = map.getOutputSizes(ImageFormat.JPEG).maxByOrNull { it.width.toLong() * it.height } ?: rawSize
+            jpegReader = ImageReader.newInstance(jpegSize.width, jpegSize.height, ImageFormat.JPEG, 2).also {
+                it.setOnImageAvailableListener({ r -> onJpegImage(r) }, handler)
+            }
+            oisAvailable = physChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true
             status("Opening ${lens.name} (${lens.label}) · RAW ${rawSize.width}x${rawSize.height}")
             val idToOpen = if (directOpen) lens.physicalId else Lenses.LOGICAL_ID
             try {
@@ -134,13 +144,16 @@ class CameraController(
         val dev = device ?: return
         val prev = previewSurface ?: return
         val reader = rawReader ?: return
+        val jpeg = jpegReader ?: return
         val outPrev = OutputConfiguration(prev)
         val outRaw = OutputConfiguration(reader.surface)
+        val outJpeg = OutputConfiguration(jpeg.surface)
         if (!directOpen) {
             outPrev.setPhysicalCameraId(lens.physicalId)
             outRaw.setPhysicalCameraId(lens.physicalId)
+            outJpeg.setPhysicalCameraId(lens.physicalId)
         }
-        val config = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, listOf(outPrev, outRaw), executor, object : CameraCaptureSession.StateCallback() {
+        val config = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, listOf(outPrev, outRaw, outJpeg), executor, object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(s: CameraCaptureSession) { session = s; startPreview() }
             override fun onConfigureFailed(s: CameraCaptureSession) {
                 if (!directOpen) {
@@ -169,7 +182,7 @@ class CameraController(
         }
         try {
             s.setRepeatingRequest(req.build(), previewCallback, handler)
-            status("${lens.name} · ${lens.label} · ${if (directOpen) "direct" else "via logical 0"} · tap = RAW, hold = 16-frame burst")
+            status("${lens.name} · ${lens.label} · ${if (directOpen) "direct" else "via logical 0"} · ${if (oisAvailable) "OIS on" else "no OIS"} · tap = RAW, hold = burst")
         } catch (e: Exception) { status("preview failed: ${e.message}") }
     }
 
@@ -257,6 +270,12 @@ class CameraController(
         }
         // Keep the preview and still pipelines identical so a capture does not visibly re-configure anything.
         b.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON)
+        // Image quality: optical stabilisation on where the lens has it; best hot-pixel correction; no EIS (crops, stills don't need it).
+        b.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, if (oisAvailable) CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON else CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+        b.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+        physChars.get(CameraCharacteristics.HOT_PIXEL_AVAILABLE_HOT_PIXEL_MODES)?.let { modes ->
+            if (modes.contains(CameraMetadata.HOT_PIXEL_MODE_HIGH_QUALITY)) b.set(CaptureRequest.HOT_PIXEL_MODE, CameraMetadata.HOT_PIXEL_MODE_HIGH_QUALITY)
+        }
         // White balance
         val k = c.kelvin
         if (k != null) {
@@ -319,12 +338,15 @@ class CameraController(
         }
     }
 
-    private fun stillRequest(): CaptureRequest.Builder {
+    private fun stillRequest(withJpeg: Boolean = false): CaptureRequest.Builder {
         val dev = device!!
         return dev.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
             addTarget(rawReader!!.surface)
+            if (withJpeg) jpegReader?.let { addTarget(it.surface) }
             previewSurface?.let { addTarget(it) }
             applyControls(this)
+            set(CaptureRequest.JPEG_ORIENTATION, physChars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90)
+            set(CaptureRequest.JPEG_QUALITY, 100.toByte())
         }
     }
 
@@ -332,7 +354,7 @@ class CameraController(
         val s = session ?: return@post
         try {
             val t0 = System.nanoTime()
-            s.capture(stillRequest().build(), object : CameraCaptureSession.CaptureCallback() {
+            s.capture(stillRequest(withJpeg = saveJpeg).build(), object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(sess: CameraCaptureSession, req: CaptureRequest, result: TotalCaptureResult) {
                     onResult(result, t0)
                 }
@@ -391,7 +413,11 @@ class CameraController(
         val job = burst
         try {
             if (job == null) {
-                val name = fileName("RAW")
+                val base = fileBase()
+                baseNames[img.timestamp] = base
+                pendingJpegs.remove(img.timestamp)?.let { saveJpegBytes(base, it) }
+                if (baseNames.size > 8) baseNames.remove(baseNames.keys.minOrNull()!!)
+                val name = "$base.dng"
                 val ms = writeDngCreator(img, result, name)
                 val took = t0?.let { (System.nanoTime() - it) / 1_000_000 } ?: -1
                 status("Saved $name (${img.width}x${img.height}) · shutter→file ${took} ms · write $ms ms")
@@ -450,9 +476,38 @@ class CameraController(
         resolver.update(uri, values, null, null)
     }
 
-    private fun fileName(kind: String): String {
+    private fun fileName(kind: String): String = fileBase(kind) + ".dng"
+
+    private fun fileBase(kind: String = "RAW"): String {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        return "LATENT_${stamp}_${lens.label.replace(".", "_")}_$kind.dng"
+        return "LATENT_${stamp}_${lens.label.replace(".", "_")}_$kind"
+    }
+
+    private fun onJpegImage(reader: ImageReader) {
+        val img = reader.acquireNextImage() ?: return
+        try {
+            val buf = img.planes[0].buffer
+            val bytes = ByteArray(buf.remaining()); buf.get(bytes)
+            val base = baseNames[img.timestamp]
+            if (base != null) saveJpegBytes(base, bytes) else pendingJpegs[img.timestamp] = bytes
+        } catch (e: Exception) { log("jpeg: ${e.message}") } finally { img.close() }
+    }
+
+    private fun saveJpegBytes(base: String, bytes: ByteArray) {
+        try {
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "$base.jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Latent")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return
+            resolver.openOutputStream(uri)!!.use { it.write(bytes) }
+            values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            log("saved $base.jpg (${bytes.size / 1024} KB)")
+        } catch (e: Exception) { log("jpeg save: ${e.message}") }
     }
 
     // ---- lifecycle ----------------------------------------------------------------
@@ -465,6 +520,8 @@ class CameraController(
         try { device?.close() } catch (_: Exception) {}
         device = null
         rawReader?.close(); rawReader = null
+        jpegReader?.close(); jpegReader = null
+        baseNames.clear(); pendingJpegs.clear()
         pendingImages.values.forEach { it.close() }; pendingImages.clear(); pendingResults.clear()
         burst = null
     }

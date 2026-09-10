@@ -92,6 +92,7 @@ fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChange
     }
     LaunchedEffect(settings.antibanding) { controller.setAntibanding(settings.antibanding) }
     LaunchedEffect(settings.directOpen) { controller.preferDirectOpen = settings.directOpen }
+    LaunchedEffect(settings.saveJpeg) { controller.saveJpeg = settings.saveJpeg }
     LaunchedEffect(focusTapAt) { if (focusTapAt > 0) { delay(1500); focusTap = null } }
 
     fun push(c: Controls) { controls = c; controller.setControls(c) }
@@ -105,7 +106,7 @@ fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChange
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("LATENT", color = LatentColors.Text, fontSize = 13.sp, letterSpacing = 4.sp, fontWeight = FontWeight.Light)
-            Text("12.5M · RAW · v" + BuildConfig.VERSION_NAME, color = LatentColors.TextDim, fontSize = 11.sp)
+            Text("12.5M · " + (if (settings.saveJpeg) "RAW+JPG" else "RAW") + " · v" + BuildConfig.VERSION_NAME, color = LatentColors.TextDim, fontSize = 11.sp)
             Text("settings", color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.combinedClickable(onClick = onOpenSettings))
         }
 
