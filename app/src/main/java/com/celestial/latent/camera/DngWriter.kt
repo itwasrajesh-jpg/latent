@@ -137,7 +137,7 @@ object DngWriter {
             entries.putShort(t.id.toShort()); entries.putShort(t.type.toShort()); entries.putInt(t.count)
             val data = if (t.id == 273) ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(imageOffset).array() else t.data
             if (data.size <= 4) {
-                entries.put(data); repeat(4 - data.size) { entries.put(0) }
+                entries.put(data); repeat(4 - data.size) { entries.put(0.toByte()) }
             } else {
                 entries.putInt(extraOffset)
                 extra.write(data); extraOffset += data.size
