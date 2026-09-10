@@ -1,1 +1,46 @@
+name: Unpack bundle
 
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'drop/*.zip'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack every zip in drop/
+        run: |
+          shopt -s nullglob
+          for z in drop/*.zip; do
+            echo "Unpacking $z"
+            if unzip -l "$z" | grep -q '\.github/workflows/'; then
+              echo "::warning::$z contains workflow files; skipped (edit workflows by hand)"
+            fi
+            unzip -o "$z" -d . -x '.github/workflows/*'
+            rm -f "$z"
+          done
+
+      - name: Commit unpacked files
+        run: |
+          git config user.name "latent-bot"
+          git config user.email "latent-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+            exit 0
+          fi
+          git commit -m "Unpack bundle"
+          git push
+
+      - name: Trigger build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build.yml --ref main
