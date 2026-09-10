@@ -34,6 +34,9 @@ class VendorProbe(private val context: Context) {
 
     companion object {
         val PATHS = listOf("0", "6", "7", "direct")
+        /** Keys known to crash the camera service on this device; skipped unless "all" is forced. */
+        val DANGEROUS = setOf("org.codeaurora.qcamera3.sessionParameters.enableQLL")
+        private val ZOOMY = Regex("zoom|crop|remosaic|qcfa|insensor|in_sensor", RegexOption.IGNORE_CASE)
         private val INTERESTING = Regex("zoom|remosaic|qcfa|quadra|insensor|in_sensor|crop|hdr|bit|dcg|superres|super_res|highres|high_res|fullsize|full_size|binning|sensor.?mode|opmode|raw|resolution|native", RegexOption.IGNORE_CASE)
     }
 
@@ -93,13 +96,18 @@ class VendorProbe(private val context: Context) {
     fun deepProbe(path: String, lens: Lens, keys: List<Pair<String, String>>, progress: (String) -> Unit): String {
         val sb = StringBuilder("LATENT DEEP PROBE · path=$path lens=${lens.physicalId} (${lens.name})\n")
         progress("baseline…")
-        val base = runOne(path, lens, null)
-        sb.appendLine("baseline: $base")
+        val base = runOneRetry(path, lens, null, 1f)
+        sb.appendLine("baseline @1x: $base")
+        val base2 = runOneRetry(path, lens, null, 2f)
+        sb.appendLine("baseline @2x (digital): $base2")
         keys.forEachIndexed { i, (k, scope) ->
-            progress("${i + 1}/${keys.size} $k")
-            val r = runOne(path, lens, k)
-            val changed = if (r.ok && base.ok && (r.rawW != base.rawW || r.rawH != base.rawH || r.crop != base.crop || r.focal != base.focal)) " ← CHANGED" else ""
-            sb.appendLine("$k ($scope): $r$changed")
+            if (k in DANGEROUS) { sb.appendLine("$k ($scope): skipped (crashes camera service)"); return@forEachIndexed }
+            val zoomy = ZOOMY.containsMatchIn(k)
+            progress("${i + 1}/${keys.size} $k" + if (zoomy) " @2x" else "")
+            val ref = if (zoomy) base2 else base
+            val r = runOneRetry(path, lens, k, if (zoomy) 2f else 1f)
+            val changed = if (r.ok && ref.ok && (r.rawW != ref.rawW || r.rawH != ref.rawH || r.crop != ref.crop || r.focal != ref.focal)) " ← CHANGED vs baseline" else ""
+            sb.appendLine("$k ($scope)${if (zoomy) " @2x" else ""}: $r$changed")
         }
         return sb.toString()
     }
@@ -108,8 +116,19 @@ class VendorProbe(private val context: Context) {
         override fun toString() = if (ok) "ok raw=${rawW}x$rawH crop=$crop focal=$focal echo=$echo" else "FAILED: $note"
     }
 
+    /** Runs a test; if the camera service is restarting (no characteristics), waits and retries once. */
+    private fun runOneRetry(path: String, lens: Lens, key: String?, zoom: Float): Outcome {
+        var r = runOne(path, lens, key, zoom)
+        if (!r.ok && (r.note.startsWith("no characteristics") || r.note.startsWith("open") || r.note == "disconnected")) {
+            Thread.sleep(4000)
+            r = runOne(path, lens, key, zoom)
+            if (!r.ok) Thread.sleep(3000)
+        }
+        return r
+    }
+
     @SuppressLint("MissingPermission")
-    private fun runOne(path: String, lens: Lens, key: String?): Outcome {
+    private fun runOne(path: String, lens: Lens, key: String?, zoom: Float): Outcome {
         val direct = path == "direct"
         val physChars = try { cm.getCameraCharacteristics(lens.physicalId) } catch (t: Throwable) { return Outcome(false, "no characteristics") }
         val map = physChars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Outcome(false, "no stream map")
@@ -127,7 +146,9 @@ class VendorProbe(private val context: Context) {
         reader.setOnImageAvailableListener({ r -> r.acquireNextImage()?.let { img -> rawW = img.width; rawH = img.height; img.close() }; gotImage.countDown() }, handler)
 
         fun finish(o: Outcome) { outcome = o; done.countDown() }
-        fun setKey(b: CaptureRequest.Builder) { if (key != null) try { b.set(CaptureRequest.Key(key, Int::class.javaObjectType), 1) } catch (t: Throwable) { try { b.set(CaptureRequest.Key(key, Byte::class.javaObjectType), 1.toByte()) } catch (_: Throwable) {} } }
+        fun setKey(b: CaptureRequest.Builder) {
+            if (zoom != 1f) b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
+            if (key != null) try { b.set(CaptureRequest.Key(key, Int::class.javaObjectType), 1) } catch (t: Throwable) { try { b.set(CaptureRequest.Key(key, Byte::class.javaObjectType), 1.toByte()) } catch (_: Throwable) {} } }
 
         try {
             cm.openCamera(if (direct) lens.physicalId else path, object : CameraDevice.StateCallback() {

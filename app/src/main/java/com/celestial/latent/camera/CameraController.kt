@@ -270,6 +270,7 @@ class CameraController(
     private fun applyControls(b: CaptureRequest.Builder) {
         val c = controls
         b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+        b.set(CaptureRequest.CONTROL_ZOOM_RATIO, c.zoom)
         // Exposure
         if (c.manualExposure) {
             val exp = c.shutterNs ?: lastAutoShutterNs
@@ -438,6 +439,7 @@ class CameraController(
                 if (baseNames.size > 8) baseNames.remove(baseNames.keys.minOrNull()!!)
                 val name = "$base.dng"
                 val ms = writeDngCreator(img, result, name)
+                metaFor(result).get(CaptureResult.SCALER_CROP_REGION)?.let { cr -> if (controls.zoom != 1f) log("zoom ${controls.zoom}x → crop region ${cr.width()}x${cr.height()}@${cr.left},${cr.top} (full frame = in-sensor, quarter = digital)") }
                 val took = t0?.let { (System.nanoTime() - it) / 1_000_000 } ?: -1
                 status("Saved $name (${img.width}x${img.height}) · shutter→file ${took} ms · write $ms ms")
             } else {

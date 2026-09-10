@@ -16,6 +16,7 @@ data class Controls(
     val kelvin: Int? = null,          // manual white balance, or null for auto
     val focusDiopters: Float? = null, // manual focus (0 = infinity), or null for autofocus
     val locked: Boolean = false,      // AE/AF lock (long-press on the viewfinder)
+    val zoom: Float = 1f,             // CONTROL_ZOOM_RATIO; 2x on the main lens is the in-sensor zoom test
 ) {
     val manualExposure get() = shutterNs != null || iso != null
 }

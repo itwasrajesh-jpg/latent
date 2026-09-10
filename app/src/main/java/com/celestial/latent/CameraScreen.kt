@@ -190,12 +190,22 @@ fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChange
         }
 
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center) {
+            // 2x on the main lens: digital crop by default; in-sensor crop if the vendor tag is enabled.
+            if (lens.physicalId == "2") {
+                Text(
+                    text = "2x", color = if (controls.zoom == 2f) LatentColors.Amber else LatentColors.Text, fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 6.dp).clip(RoundedCornerShape(999.dp))
+                        .background(if (controls.zoom == 2f) LatentColors.Surface else LatentColors.Background)
+                        .combinedClickable(onClick = { push(controls.copy(zoom = if (controls.zoom == 2f) 1f else 2f)) })
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
             Lenses.ALL.forEach { l ->
                 LensChip(l, l == lens) {
                     if (l != lens) {
                         lens = l
                         // Manual values may be out of range on the new lens; go back to auto for exposure and focus.
-                        push(controls.copy(shutterNs = null, iso = null, focusDiopters = null))
+                        push(controls.copy(shutterNs = null, iso = null, focusDiopters = null, zoom = 1f))
                         onLensChanged(l)
                         surfaceRef?.let { surf -> controller.open(l, surf) }
                     }
