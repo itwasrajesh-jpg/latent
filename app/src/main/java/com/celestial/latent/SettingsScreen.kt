@@ -31,7 +31,7 @@ import com.celestial.latent.camera.Lenses
 import com.celestial.latent.ui.LatentColors
 
 @Composable
-fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpenReport: () -> Unit, onBack: () -> Unit) {
+fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpenReport: () -> Unit, onOpenVendor: () -> Unit, onBack: () -> Unit) {
     Column(
         Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().navigationBarsPadding()
             .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
@@ -71,7 +71,13 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
         ) { onChange(settings.copy(defaultLensId = it)) }
 
         Section("Diagnostics")
-        ToggleRow("Open lenses directly", "Experimental: open each lens by its own ID instead of through camera 0. Try this if tap-to-focus ignores where you tap. Takes effect on next lens switch.", settings.directOpen) { onChange(settings.copy(directOpen = it)) }
+        OptionRow(
+            title = "Camera path",
+            subtitle = "Which logical camera the lens is reached through, or open the lens directly. Vendor keys differ per path. Takes effect on next lens switch.",
+            options = listOf("0" to "0", "6" to "6", "7" to "7", "Direct" to "direct"),
+            selected = settings.cameraPath,
+        ) { onChange(settings.copy(cameraPath = it)) }
+        Text("Vendor tags & opmode ›", color = LatentColors.Amber, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onOpenVendor).padding(vertical = 10.dp))
         Text("Camera report ›", color = LatentColors.Amber, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onOpenReport).padding(vertical = 10.dp))
 
         Spacer(Modifier.height(24.dp))

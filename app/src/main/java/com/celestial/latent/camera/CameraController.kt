@@ -66,9 +66,14 @@ class CameraController(
     private var previewSurface: Surface? = null
     private var lens: Lens = Lenses.DEFAULT
     private var directOpen = false
-    /** User preference: open the physical lens by its own ID instead of via logical camera 0. */
-    @Volatile var preferDirectOpen = false
+    /** Camera path: logical camera ID to route through ("0", "6", "7"...) or "direct". */
+    @Volatile var cameraPath: String = Lenses.LOGICAL_ID
     private var fallbackDirect = false
+    private var logicalId: String = Lenses.LOGICAL_ID
+    /** Vendor overrides (MotionCam-style). Applied at session creation / in every request. */
+    @Volatile var opmode: Int = 0
+    @Volatile var vendorTags: List<VendorTagSpec> = emptyList()
+    @Volatile var onVendorEcho: (String) -> Unit = {}
     private lateinit var physChars: CameraCharacteristics
     private var rawSize = Size(4096, 3072)
 
@@ -113,7 +118,8 @@ class CameraController(
             closeInternal()
             this.lens = lens
             this.previewSurface = surface
-            directOpen = preferDirectOpen || fallbackDirect
+            directOpen = cameraPath == "direct" || fallbackDirect
+            logicalId = if (cameraPath == "direct") Lenses.LOGICAL_ID else cameraPath
             physChars = cm.getCameraCharacteristics(lens.physicalId)
             afRegion = null; afTriggerPending = false; lastTransform = null; lastGains = null
             val map = physChars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
@@ -127,7 +133,7 @@ class CameraController(
             }
             oisAvailable = physChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true
             status("Opening ${lens.name} (${lens.label}) · RAW ${rawSize.width}x${rawSize.height}")
-            val idToOpen = if (directOpen) lens.physicalId else Lenses.LOGICAL_ID
+            val idToOpen = if (directOpen) lens.physicalId else logicalId
             try {
                 cm.openCamera(idToOpen, object : CameraDevice.StateCallback() {
                     override fun onOpened(cam: CameraDevice) { device = cam; createSession() }
@@ -153,7 +159,8 @@ class CameraController(
             outRaw.setPhysicalCameraId(lens.physicalId)
             outJpeg.setPhysicalCameraId(lens.physicalId)
         }
-        val config = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, listOf(outPrev, outRaw, outJpeg), executor, object : CameraCaptureSession.StateCallback() {
+        val sessionType = if (opmode != 0) opmode else SessionConfiguration.SESSION_REGULAR
+        val config = SessionConfiguration(sessionType, listOf(outPrev, outRaw, outJpeg), executor, object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(s: CameraCaptureSession) { session = s; startPreview() }
             override fun onConfigureFailed(s: CameraCaptureSession) {
                 if (!directOpen) {
@@ -164,7 +171,16 @@ class CameraController(
                 } else status("Session configuration failed for ${lens.name}")
             }
         })
-        try { dev.createCaptureSession(config) } catch (e: Exception) {
+        try {
+            val sessionTags = vendorTags.filter { it.scope == "session" && it.name.isNotBlank() }
+            if (sessionTags.isNotEmpty()) {
+                val sp = dev.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                sessionTags.forEach { applyVendorTag(sp, it) }
+                config.sessionParameters = sp.build()
+            }
+            if (opmode != 0) log("session opmode 0x${Integer.toHexString(opmode)}")
+            dev.createCaptureSession(config)
+        } catch (e: Exception) {
             if (!directOpen) {
                 log("createCaptureSession threw (${e.message}); retrying with direct open of ${lens.physicalId}")
                 fallbackDirect = true
@@ -276,6 +292,8 @@ class CameraController(
         physChars.get(CameraCharacteristics.HOT_PIXEL_AVAILABLE_HOT_PIXEL_MODES)?.let { modes ->
             if (modes.contains(CameraMetadata.HOT_PIXEL_MODE_HIGH_QUALITY)) b.set(CaptureRequest.HOT_PIXEL_MODE, CameraMetadata.HOT_PIXEL_MODE_HIGH_QUALITY)
         }
+        // Vendor tags: session-scoped ones are sent again in requests too (harmless, and some HALs read them there).
+        vendorTags.filter { it.name.isNotBlank() }.forEach { applyVendorTag(b, it) }
         // White balance
         val k = c.kelvin
         if (k != null) {
@@ -357,6 +375,7 @@ class CameraController(
             s.capture(stillRequest(withJpeg = saveJpeg).build(), object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(sess: CameraCaptureSession, req: CaptureRequest, result: TotalCaptureResult) {
                     onResult(result, t0)
+                    echoVendorTags(result)
                 }
                 override fun onCaptureFailed(sess: CameraCaptureSession, req: CaptureRequest, failure: android.hardware.camera2.CaptureFailure) {
                     status("capture failed (reason ${failure.reason})")
@@ -508,6 +527,69 @@ class CameraController(
             resolver.update(uri, values, null, null)
             log("saved $base.jpg (${bytes.size / 1024} KB)")
         } catch (e: Exception) { log("jpeg save: ${e.message}") }
+    }
+
+    // ---- vendor tags ----------------------------------------------------------------
+
+    data class VendorTagSpec(val name: String, val scope: String, val type: String, val value: String)
+
+    private fun parseNums(v: String): List<String> = v.split(',', '/', ' ').map { it.trim() }.filter { it.isNotEmpty() }
+
+    /** Sets one vendor key on a request builder; logs if the driver rejects the key or type. */
+    private fun applyVendorTag(b: CaptureRequest.Builder, t: VendorTagSpec) {
+        try {
+            val parts = parseNums(t.value)
+            val isArray = parts.size > 1
+            when (t.type) {
+                "i32" -> if (isArray) b.set(CaptureRequest.Key(t.name, IntArray::class.java), parts.map { it.toInt() }.toIntArray())
+                         else b.set(CaptureRequest.Key(t.name, Int::class.javaObjectType), parts[0].toInt())
+                "i64" -> if (isArray) b.set(CaptureRequest.Key(t.name, LongArray::class.java), parts.map { it.toLong() }.toLongArray())
+                         else b.set(CaptureRequest.Key(t.name, Long::class.javaObjectType), parts[0].toLong())
+                "f32" -> if (isArray) b.set(CaptureRequest.Key(t.name, FloatArray::class.java), parts.map { it.toFloat() }.toFloatArray())
+                         else b.set(CaptureRequest.Key(t.name, Float::class.javaObjectType), parts[0].toFloat())
+                "f64" -> if (isArray) b.set(CaptureRequest.Key(t.name, DoubleArray::class.java), parts.map { it.toDouble() }.toDoubleArray())
+                         else b.set(CaptureRequest.Key(t.name, Double::class.javaObjectType), parts[0].toDouble())
+                "u8" -> if (isArray) b.set(CaptureRequest.Key(t.name, ByteArray::class.java), parts.map { it.toInt().toByte() }.toByteArray())
+                        else b.set(CaptureRequest.Key(t.name, Byte::class.javaObjectType), parts[0].toInt().toByte())
+            }
+        } catch (e: Exception) { log("vendor tag ${t.name} rejected: ${e.javaClass.simpleName} ${e.message}") }
+    }
+
+    /** Reads back every configured tag from the capture result so the user can see what the driver actually did. */
+    private fun echoVendorTags(result: TotalCaptureResult) {
+        val tags = vendorTags.filter { it.name.isNotBlank() }
+        if (tags.isEmpty() && opmode == 0) return
+        val sb = StringBuilder()
+        if (opmode != 0) sb.appendLine("opmode 0x${Integer.toHexString(opmode)} · session ${if (directOpen) "direct" else "via $logicalId"}")
+        for (t in tags) {
+            val v: Any? = try {
+                val r = metaFor(result)
+                when (t.type) {
+                    "i32" -> r.get(CaptureResult.Key(t.name, IntArray::class.java))?.joinToString() ?: r.get(CaptureResult.Key(t.name, Int::class.javaObjectType))
+                    "i64" -> r.get(CaptureResult.Key(t.name, LongArray::class.java))?.joinToString() ?: r.get(CaptureResult.Key(t.name, Long::class.javaObjectType))
+                    "f32" -> r.get(CaptureResult.Key(t.name, FloatArray::class.java))?.joinToString() ?: r.get(CaptureResult.Key(t.name, Float::class.javaObjectType))
+                    "f64" -> r.get(CaptureResult.Key(t.name, DoubleArray::class.java))?.joinToString() ?: r.get(CaptureResult.Key(t.name, Double::class.javaObjectType))
+                    else -> r.get(CaptureResult.Key(t.name, ByteArray::class.java))?.joinToString() ?: r.get(CaptureResult.Key(t.name, Byte::class.javaObjectType))
+                }
+            } catch (e: Exception) { "<${e.javaClass.simpleName}>" }
+            sb.appendLine("${t.name.substringAfterLast('.')} (${t.scope}/${t.type}) sent=${t.value} → result=${v ?: "not reported"}")
+        }
+        val text = sb.toString().trim()
+        log(text); onVendorEcho(text)
+    }
+
+    /** Vendor keys the driver advertises for the current lens/path: name -> session/request/both. */
+    fun exposedVendorKeys(): List<Pair<String, String>> {
+        if (!hasCharacteristics) return emptyList()
+        val chars = listOfNotNull(physChars, if (!directOpen) runCatching { cm.getCameraCharacteristics(logicalId) }.getOrNull() else null)
+        val out = LinkedHashMap<String, String>()
+        for (ch in chars) {
+            val sess = runCatching { ch.availableSessionKeys?.map { it.name } }.getOrNull().orEmpty().toSet()
+            val req = runCatching { ch.availableCaptureRequestKeys?.map { it.name } }.getOrNull().orEmpty()
+            for (k in req) if (!k.startsWith("android.")) out[k] = if (k in sess) "session" else "request"
+            for (k in sess) if (!k.startsWith("android.") && k !in out) out[k] = "session"
+        }
+        return out.entries.map { it.key to it.value }.sortedBy { it.first }
     }
 
     // ---- lifecycle ----------------------------------------------------------------

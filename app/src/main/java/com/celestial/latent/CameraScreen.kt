@@ -63,7 +63,7 @@ import kotlinx.coroutines.delay
 private enum class Cell { EV, S, ISO, WB, F }
 
 @Composable
-fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChanged: (Lens) -> Unit) {
+fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChanged: (Lens) -> Unit, onController: (CameraController) -> Unit = {}, onVendorEcho: (String) -> Unit = {}) {
     val context = LocalContext.current
     var status by remember { mutableStateOf("Starting camera…") }
     var log by remember { mutableStateOf("") }
@@ -91,7 +91,10 @@ fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChange
         onDispose { ShutterBus.onShutter = null; controller.destroy() }
     }
     LaunchedEffect(settings.antibanding) { controller.setAntibanding(settings.antibanding) }
-    LaunchedEffect(settings.directOpen) { controller.preferDirectOpen = settings.directOpen }
+    LaunchedEffect(settings.cameraPath) { controller.cameraPath = settings.cameraPath }
+    LaunchedEffect(settings.opmode) { controller.opmode = settings.opmode }
+    LaunchedEffect(settings.vendorTags) { controller.vendorTags = settings.vendorTags.map { CameraController.VendorTagSpec(it.name, it.scope, it.type, it.value) } }
+    LaunchedEffect(Unit) { controller.onVendorEcho = onVendorEcho; onController(controller) }
     LaunchedEffect(settings.saveJpeg) { controller.saveJpeg = settings.saveJpeg }
     LaunchedEffect(focusTapAt) { if (focusTapAt > 0) { delay(1500); focusTap = null } }
 

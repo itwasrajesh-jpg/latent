@@ -65,6 +65,8 @@ private fun Root() {
     val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> granted = ok }
     var screen by remember { mutableStateOf("camera") }
     var settings by remember { mutableStateOf(AppSettings.load(context)) }
+    var controllerRef by remember { mutableStateOf<com.celestial.latent.camera.CameraController?>(null) }
+    var vendorEcho by remember { mutableStateOf("") }
 
     if (!granted) {
         Column(Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().padding(24.dp)) {
@@ -83,12 +85,22 @@ private fun Root() {
             settings = settings,
             onChange = { s -> settings = s; AppSettings.save(context, s) },
             onOpenReport = { screen = "report" },
+            onOpenVendor = { screen = "vendor" },
             onBack = { screen = "camera" },
+        )
+        "vendor" -> VendorScreen(
+            settings = settings,
+            exposedKeys = controllerRef?.exposedVendorKeys() ?: emptyList(),
+            lastEcho = vendorEcho,
+            onChange = { s -> settings = s; AppSettings.save(context, s) },
+            onBack = { screen = "settings" },
         )
         else -> CameraScreen(
             settings = settings,
             onOpenSettings = { screen = "settings" },
             onLensChanged = { l -> if (settings.rememberLens) { settings = settings.copy(defaultLensId = l.physicalId); AppSettings.save(context, settings) } },
+            onController = { c -> controllerRef = c },
+            onVendorEcho = { e -> vendorEcho = e },
         )
     }
 }

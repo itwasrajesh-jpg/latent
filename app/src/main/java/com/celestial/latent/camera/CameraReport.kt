@@ -147,6 +147,32 @@ object CameraReport {
             val dr = ch.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)
             sb.appendLine("  dynamic range profiles: ${dr?.supportedProfiles}")
         }
+        // Vendor tags: anything the OEM or chipset added beyond Android's own keys.
+        fun vendor(names: List<String>?): List<String> = names.orEmpty().filter { !it.startsWith("android.") }.sorted()
+        val vChar = vendor(ch.keys.map { it.name })
+        val vReq = vendor(ch.availableCaptureRequestKeys?.map { it.name })
+        val vRes = vendor(ch.availableCaptureResultKeys?.map { it.name })
+        val vSess = vendor(if (Build.VERSION.SDK_INT >= 28) ch.availableSessionKeys?.map { it.name } else null)
+        val vPhys = vendor(if (Build.VERSION.SDK_INT >= 28) ch.availablePhysicalCameraRequestKeys?.map { it.name } else null)
+        sb.appendLine("  vendor characteristic keys (${vChar.size}): " + vChar.joinToString())
+        for (k in vChar) {
+            val key = ch.keys.firstOrNull { it.name == k } ?: continue
+            val v = try { ch.get(key) } catch (t: Throwable) { "<err>" }
+            val text = when (v) {
+                null -> "null"
+                is IntArray -> v.joinToString(prefix = "[", postfix = "]")
+                is ByteArray -> v.joinToString(prefix = "[", postfix = "]", limit = 32)
+                is FloatArray -> v.joinToString(prefix = "[", postfix = "]")
+                is LongArray -> v.joinToString(prefix = "[", postfix = "]")
+                is Array<*> -> v.joinToString(prefix = "[", postfix = "]", limit = 16)
+                else -> v.toString()
+            }
+            sb.appendLine("    $k = ${text.take(300)}")
+        }
+        sb.appendLine("  vendor request keys (${vReq.size}): " + vReq.joinToString())
+        sb.appendLine("  vendor result keys (${vRes.size}): " + vRes.joinToString())
+        sb.appendLine("  vendor session keys (${vSess.size}): " + vSess.joinToString())
+        sb.appendLine("  vendor physical-request keys (${vPhys.size}): " + vPhys.joinToString())
         if (isPhysical) sb.appendLine("  (physical)")
     }
 

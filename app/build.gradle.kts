@@ -13,7 +13,7 @@ android {
 
     defaultConfig {
         applicationId = "com.celestial.latent"
-        minSdk = 28
+        minSdk = 29
         targetSdk = 35
         versionCode = buildNumber
         versionName = "0.1.$buildNumber"
