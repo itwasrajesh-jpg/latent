@@ -1,0 +1,8 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- A frame of film with a single latent (not yet developed) exposure: a hollow amber ring. -->
+    <path android:fillColor="#F1EFE8" android:pathData="M30,30h48v48h-48z M34,34v40h40v-40z"/>
+    <path android:fillColor="#F1EFE8" android:pathData="M30,22h6v4h-6z M42,22h6v4h-6z M54,22h6v4h-6z M66,22h6v4h-6z M30,82h6v4h-6z M42,82h6v4h-6z M54,82h6v4h-6z M66,82h6v4h-6z"/>
+    <path android:fillColor="#FAC775" android:pathData="M54,42a12,12 0 1,0 0.01,0z M54,46a8,8 0 1,1 -0.01,0z"/>
+</vector>

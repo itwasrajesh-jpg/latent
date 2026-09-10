@@ -1,0 +1,9 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+# Real release keys must never be committed. The committed debug.keystore is intentional.
+*.jks
+release.keystore
