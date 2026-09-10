@@ -1,11 +1,6 @@
 name: Build Latent APK
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'drop/**'
-      - '**.md'
   workflow_dispatch:
 
 permissions:
