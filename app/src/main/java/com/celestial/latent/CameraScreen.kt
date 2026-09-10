@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalFoundationApi::class)
+
 package com.celestial.latent
 
 import android.view.SurfaceHolder
@@ -42,7 +44,6 @@ import com.celestial.latent.camera.Lens
 import com.celestial.latent.camera.Lenses
 import com.celestial.latent.ui.LatentColors
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CameraScreen(onOpenReport: () -> Unit) {
     val context = LocalContext.current

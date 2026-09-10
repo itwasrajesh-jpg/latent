@@ -1,6 +1,7 @@
 package com.celestial.latent.camera
 
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureResult
 import android.os.Build
 import java.io.ByteArrayOutputStream
@@ -40,10 +41,10 @@ object DngWriter {
 
     fun metaFrom(ch: CameraCharacteristics, result: CaptureResult?, width: Int, height: Int, black: Int, white: Int, orientation: Int, description: String): Meta {
         val cfa = when (ch.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)) {
-            CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB -> byteArrayOf(0, 1, 1, 2)
-            CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG -> byteArrayOf(1, 0, 2, 1)
-            CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG -> byteArrayOf(1, 2, 0, 1)
-            CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR -> byteArrayOf(2, 1, 1, 0)
+            CameraMetadata.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB -> byteArrayOf(0, 1, 1, 2)
+            CameraMetadata.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG -> byteArrayOf(1, 0, 2, 1)
+            CameraMetadata.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG -> byteArrayOf(1, 2, 0, 1)
+            CameraMetadata.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR -> byteArrayOf(2, 1, 1, 0)
             else -> byteArrayOf(0, 1, 1, 2)
         }
         fun mat(key: CameraCharacteristics.Key<android.hardware.camera2.params.ColorSpaceTransform>): DoubleArray? {
