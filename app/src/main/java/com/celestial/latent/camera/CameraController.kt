@@ -14,7 +14,10 @@ import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.DngCreator
 import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.params.ColorSpaceTransform
+import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
 import android.media.ImageReader
@@ -22,6 +25,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.provider.MediaStore
 import android.util.Log
+import android.util.Range
 import android.util.Size
 import android.view.Surface
 import android.media.ExifInterface
@@ -39,7 +43,12 @@ import java.util.concurrent.Executor
  *
  * All camera callbacks run on one background thread; UI gets plain strings via [onStatus].
  */
-class CameraController(private val context: Context, private val onStatus: (String) -> Unit, private val onLog: (String) -> Unit) {
+class CameraController(
+    private val context: Context,
+    private val onStatus: (String) -> Unit,
+    private val onLog: (String) -> Unit,
+    private val onReadout: (LiveReadout) -> Unit = {},
+) {
 
     private val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private val thread = HandlerThread("latent-camera").apply { start() }
@@ -62,6 +71,23 @@ class CameraController(private val context: Context, private val onStatus: (Stri
     // Burst state
     private var burst: BurstJob? = null
 
+    // Control strip state
+    @Volatile var controls: Controls = Controls(); private set
+    private var lastAutoShutterNs = 10_000_000L
+    private var lastAutoIso = 100
+    private var lastTransform: ColorSpaceTransform? = null
+    private var lastGains: RggbChannelVector? = null
+    private var afRegion: MeteringRectangle? = null
+    private var afTriggerPending = false
+    private var frameCounter = 0
+
+    /** Ranges of the current lens, for the sliders. */
+    val shutterRange: Range<Long> get() = physChars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) ?: Range(100_000L, 1_000_000_000L)
+    val isoRange: Range<Int> get() = physChars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: Range(100, 3200)
+    val minFocusDiopters: Float get() = physChars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 10f
+    val evRange: Range<Int> get() = physChars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE) ?: Range(-12, 12)
+    val hasCharacteristics get() = this::physChars.isInitialized
+
     val currentLens get() = lens
 
     fun previewSizeFor(lens: Lens): Size {
@@ -79,6 +105,7 @@ class CameraController(private val context: Context, private val onStatus: (Stri
             this.lens = lens
             this.previewSurface = surface
             physChars = cm.getCameraCharacteristics(lens.physicalId)
+            afRegion = null; afTriggerPending = false; lastTransform = null; lastGains = null
             val map = physChars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
             rawSize = map.getOutputSizes(ImageFormat.RAW_SENSOR).maxByOrNull { it.width.toLong() * it.height } ?: rawSize
             rawReader = ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 6).also {
@@ -133,15 +160,114 @@ class CameraController(private val context: Context, private val onStatus: (Stri
         val dev = device ?: return; val s = session ?: return; val prev = previewSurface ?: return
         val req = dev.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
             addTarget(prev)
-            set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
-            set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-            set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
-            set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
+            applyControls(this)
         }
         try {
-            s.setRepeatingRequest(req.build(), null, handler)
+            s.setRepeatingRequest(req.build(), previewCallback, handler)
             status("${lens.name} · ${lens.label} · ${if (directOpen) "direct" else "via logical 0"} · tap = RAW, hold = 16-frame burst")
         } catch (e: Exception) { status("preview failed: ${e.message}") }
+    }
+
+    /** Re-issue the repeating preview request with the current controls. */
+    private fun updatePreview() {
+        val dev = device ?: return; val s = session ?: return; val prev = previewSurface ?: return
+        try {
+            val req = dev.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(prev); applyControls(this) }
+            if (afTriggerPending) {
+                // One-shot AF trigger, then the repeating request continues without it.
+                afTriggerPending = false
+                val trig = dev.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                    addTarget(prev); applyControls(this)
+                    set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
+                }
+                s.capture(trig.build(), previewCallback, handler)
+            }
+            s.setRepeatingRequest(req.build(), previewCallback, handler)
+        } catch (e: Exception) { status("update failed: ${e.message}") }
+    }
+
+    fun setControls(c: Controls) = handler.post { controls = c; updatePreview() }
+
+    /** Tap-to-focus. u,v are 0..1 across the portrait viewfinder (u right, v down). */
+    fun tapFocus(u: Float, v: Float) = handler.post {
+        val active = physChars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return@post
+        // Sensor is mounted 90° clockwise: viewfinder x runs along sensor y (inverted), viewfinder y along sensor x.
+        val sx = v.coerceIn(0f, 1f); val sy = (1f - u).coerceIn(0f, 1f)
+        val half = 0.07f
+        val l = ((sx - half) * active.width()).toInt().coerceIn(0, active.width() - 2)
+        val t = ((sy - half) * active.height()).toInt().coerceIn(0, active.height() - 2)
+        val w = (2 * half * active.width()).toInt().coerceAtLeast(2).coerceAtMost(active.width() - l)
+        val h = (2 * half * active.height()).toInt().coerceAtLeast(2).coerceAtMost(active.height() - t)
+        afRegion = MeteringRectangle(l, t, w, h, MeteringRectangle.METERING_WEIGHT_MAX - 1)
+        afTriggerPending = true
+        controls = controls.copy(focusDiopters = null)
+        updatePreview()
+    }
+
+    /** Applies the control strip to any request (preview or still). */
+    private fun applyControls(b: CaptureRequest.Builder) {
+        val c = controls
+        b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+        // Exposure
+        if (c.manualExposure) {
+            val exp = c.shutterNs ?: lastAutoShutterNs
+            val iso = c.iso ?: lastAutoIso
+            b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
+            b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exp.coerceIn(shutterRange.lower, shutterRange.upper))
+            b.set(CaptureRequest.SENSOR_SENSITIVITY, iso.coerceIn(isoRange.lower, isoRange.upper))
+            b.set(CaptureRequest.SENSOR_FRAME_DURATION, maxOf(33_333_333L, exp))
+        } else {
+            b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
+            b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, c.evIndex.coerceIn(evRange.lower, evRange.upper))
+        }
+        // White balance
+        val k = c.kelvin
+        if (k != null) {
+            b.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_OFF)
+            b.set(CaptureRequest.COLOR_CORRECTION_MODE, CameraMetadata.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+            b.set(CaptureRequest.COLOR_CORRECTION_GAINS, ControlMath.gainsForKelvin(physChars, k))
+            b.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, lastTransform ?: ColorSpaceTransform(intArrayOf(1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1)))
+        } else {
+            b.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
+        }
+        // Focus
+        val f = c.focusDiopters
+        if (f != null) {
+            b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
+            b.set(CaptureRequest.LENS_FOCUS_DISTANCE, f.coerceIn(0f, minFocusDiopters))
+        } else {
+            val region = afRegion
+            if (region != null) {
+                b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO)
+                b.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(region))
+                b.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(region))
+            } else {
+                b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+            }
+        }
+    }
+
+    /** Reads what the camera actually did, so "A" can show real numbers and manual modes start from them. */
+    private val previewCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(sess: CameraCaptureSession, req: CaptureRequest, result: TotalCaptureResult) {
+            val r = metaFor(result)
+            val c = controls
+            r.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { if (!c.manualExposure) lastAutoShutterNs = it }
+            r.get(CaptureResult.SENSOR_SENSITIVITY)?.let { if (!c.manualExposure) lastAutoIso = it }
+            if (c.kelvin == null) {
+                r.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)?.let { lastTransform = it }
+                r.get(CaptureResult.COLOR_CORRECTION_GAINS)?.let { lastGains = it }
+            }
+            if (++frameCounter % 6 == 0) {
+                val gains = lastGains
+                onReadout(LiveReadout(
+                    shutterNs = r.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0,
+                    iso = r.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0,
+                    focusDiopters = r.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f,
+                    kelvinEstimate = if (gains != null && frameCounter % 30 == 0) ControlMath.kelvinForGains(physChars, gains) else -1,
+                ))
+            }
+        }
     }
 
     private fun stillRequest(): CaptureRequest.Builder {
@@ -149,10 +275,7 @@ class CameraController(private val context: Context, private val onStatus: (Stri
         return dev.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
             addTarget(rawReader!!.surface)
             previewSurface?.let { addTarget(it) }
-            set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
-            set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-            set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
-            set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
+            applyControls(this)
             // Ask for the lens shading map so the DNG carries the vignetting correction (like Xiaomi's files).
             set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON)
             set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_OFF)
@@ -260,7 +383,7 @@ class CameraController(private val context: Context, private val onStatus: (Stri
     private fun writeDngCreator(img: Image, result: TotalCaptureResult, name: String): Long {
         val creator = DngCreator(physChars, metaFor(result))
         creator.setOrientation(ExifInterface.ORIENTATION_ROTATE_90)
-        creator.setDescription("Latent single RAW · ${lens.name} ${lens.label}")
+        creator.setDescription("Latent single RAW - ${lens.name} ${lens.label}")
         val t = System.nanoTime()
         saveTo(name) { creator.writeImage(it, img) }
         creator.close()
