@@ -26,6 +26,8 @@ data class AppSettings(
     val inSensorZoomJpeg: Boolean = false,  // Qualcomm EnableInsensorZoom: native-crop JPEG at 2x (RAW stays 1x for now)
     val dcgMode: Boolean = false,           // EnableHDRDCGMode=1 (experimental; measure with the quality probe)
     val sensorShdr: Boolean = false,        // inSensorSHDRMode=1 (experimental)
+    val timerSeconds: Int = 0,              // 0 / 3 / 10
+    val burstMode: Boolean = false,         // tap = 16-frame burst (hold = single)
 ) {
     companion object {
         const val ANTIBANDING_OFF = 0
@@ -51,6 +53,8 @@ data class AppSettings(
                 inSensorZoomJpeg = p.getBoolean("inSensorZoomJpeg", false),
                 dcgMode = p.getBoolean("dcgMode", false),
                 sensorShdr = p.getBoolean("sensorShdr", false),
+                timerSeconds = p.getInt("timerSeconds", 0),
+                burstMode = p.getBoolean("burstMode", false),
             )
         }
 
@@ -69,6 +73,8 @@ data class AppSettings(
                 .putBoolean("inSensorZoomJpeg", s.inSensorZoomJpeg)
                 .putBoolean("dcgMode", s.dcgMode)
                 .putBoolean("sensorShdr", s.sensorShdr)
+                .putInt("timerSeconds", s.timerSeconds)
+                .putBoolean("burstMode", s.burstMode)
                 .apply()
         }
     }

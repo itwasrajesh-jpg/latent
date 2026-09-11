@@ -48,6 +48,7 @@ class CameraController(
     private val onStatus: (String) -> Unit,
     private val onLog: (String) -> Unit,
     private val onReadout: (LiveReadout) -> Unit = {},
+    private val onSaved: (android.net.Uri) -> Unit = {},
 ) {
 
     private val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -516,6 +517,7 @@ class CameraController(
         resolver.openOutputStream(uri)!!.use(block)
         values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
+        onSaved(uri)
     }
 
     private fun fileName(kind: String): String = fileBase(kind) + ".dng"
@@ -564,6 +566,7 @@ class CameraController(
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
             log("saved $base.jpg (${bytes.size / 1024} KB)")
+            onSaved(uri)
         } catch (e: Exception) { log("jpeg save: ${e.message}") }
     }
 

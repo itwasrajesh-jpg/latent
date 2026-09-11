@@ -2,14 +2,21 @@
 
 package com.celestial.latent
 
+import android.content.ContentUris
+import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
+import android.net.Uri
+import android.provider.MediaStore
+import android.util.Size
 import android.view.Surface
 import android.view.TextureView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,15 +50,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.celestial.latent.camera.CameraController
@@ -66,7 +76,14 @@ import kotlinx.coroutines.delay
 private enum class Cell { EV, S, ISO, WB, F }
 
 @Composable
-fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChanged: (Lens) -> Unit, onController: (CameraController) -> Unit = {}, onVendorEcho: (String) -> Unit = {}) {
+fun CameraScreen(
+    settings: AppSettings,
+    onSettingsChange: (AppSettings) -> Unit,
+    onOpenSettings: () -> Unit,
+    onLensChanged: (Lens) -> Unit,
+    onController: (CameraController) -> Unit = {},
+    onVendorEcho: (String) -> Unit = {},
+) {
     val context = LocalContext.current
     var status by remember { mutableStateOf("Starting camera…") }
     var log by remember { mutableStateOf("") }
@@ -78,6 +95,17 @@ fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChange
     var selected by remember { mutableStateOf<Cell?>(null) }
     var focusTap by remember { mutableStateOf<Offset?>(null) }
     var focusTapAt by remember { mutableStateOf(0L) }
+    var drawerOpen by remember { mutableStateOf(false) }
+    var lastUri by remember { mutableStateOf<Uri?>(null) }
+    var thumb by remember { mutableStateOf<Bitmap?>(null) }
+    var countdown by remember { mutableStateOf(0) }
+
+    fun loadThumb(uri: Uri) {
+        Thread {
+            val b = runCatching { context.contentResolver.loadThumbnail(uri, Size(192, 192), null) }.getOrNull()
+            if (b != null) { thumb = b; lastUri = uri }
+        }.start()
+    }
 
     val controller = remember {
         CameraController(
@@ -85,15 +113,37 @@ fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChange
             onStatus = { s -> status = s },
             onLog = { s -> log = (s + "\n" + log).take(2000) },
             onReadout = { r -> readout = r; if (r.kelvinEstimate > 0) kelvinShown = r.kelvinEstimate },
+            onSaved = { uri -> loadThumb(uri) },
         )
     }
     var surfaceRef by remember { mutableStateOf<Surface?>(null) }
 
+    // Most recent Latent file at startup.
+    LaunchedEffect(Unit) {
+        val uri = runCatching {
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Images.Media._ID),
+                "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?", arrayOf("DCIM/Latent%"),
+                "${MediaStore.Images.Media.DATE_ADDED} DESC",
+            )?.use { c -> if (c.moveToFirst()) ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, c.getLong(0)) else null }
+        }.getOrNull()
+        if (uri != null) loadThumb(uri)
+    }
+
+    fun push(c: Controls) { controls = c; controller.setControls(c) }
+
+    fun shoot(single: Boolean) {
+        val fire = { if (single) controller.captureSingle() else controller.captureBurst(16) }
+        if (settings.timerSeconds > 0) countdown = settings.timerSeconds else fire()
+    }
+    LaunchedEffect(countdown) {
+        if (countdown > 0) { delay(1000); countdown -= 1; if (countdown == 0) { if (settings.burstMode) controller.captureBurst(16) else controller.captureSingle() } }
+    }
+
     DisposableEffect(Unit) {
-        ShutterBus.onShutter = { if (settings.volumeShutter) controller.captureSingle() }
+        ShutterBus.onShutter = { if (settings.volumeShutter) shoot(single = !settings.burstMode) }
         onDispose { ShutterBus.onShutter = null; controller.destroy() }
     }
-    // Android takes the camera away in the background; get it back on resume.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, event ->
@@ -106,55 +156,45 @@ fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChange
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
+    LaunchedEffect(focusTapAt) { if (focusTapAt > 0) { delay(1500); focusTap = null } }
     LaunchedEffect(settings.antibanding) { controller.setAntibanding(settings.antibanding) }
     LaunchedEffect(settings.cameraPath) { controller.cameraPath = settings.cameraPath }
     LaunchedEffect(settings.opmode) { controller.opmode = settings.opmode }
     LaunchedEffect(settings.vendorTags) { controller.vendorTags = settings.vendorTags.map { CameraController.VendorTagSpec(it.name, it.scope, it.type, it.value) } }
-    LaunchedEffect(Unit) { controller.onVendorEcho = onVendorEcho; onController(controller) }
     LaunchedEffect(settings.saveJpeg) { controller.saveJpeg = settings.saveJpeg }
     LaunchedEffect(settings.inSensorZoomJpeg) { controller.inSensorZoomJpeg = settings.inSensorZoomJpeg }
     LaunchedEffect(settings.dcgMode) { controller.dcgMode = settings.dcgMode }
     LaunchedEffect(settings.sensorShdr) { controller.sensorShdr = settings.sensorShdr }
-    LaunchedEffect(focusTapAt) { if (focusTapAt > 0) { delay(1500); focusTap = null } }
+    LaunchedEffect(Unit) { controller.onVendorEcho = onVendorEcho; onController(controller) }
 
-    fun push(c: Controls) { controls = c; controller.setControls(c) }
+    // Session-affecting toggles need a rebuild: reopen the same lens.
+    fun reopen() { surfaceRef?.let { surf -> controller.open(lens, surf) } }
 
-    Column(
-        modifier = Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().navigationBarsPadding(),
-    ) {
+    Column(Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().navigationBarsPadding()) {
+
+        // ---- Top bar: wordmark · chevron · format · gear ----
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("LATENT", color = LatentColors.Text, fontSize = 13.sp, letterSpacing = 4.sp, fontWeight = FontWeight.Light)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("12.5M · " + (if (settings.saveJpeg) "RAW+JPG" else "RAW") + " · v" + BuildConfig.VERSION_NAME, color = LatentColors.TextDim, fontSize = 11.sp)
-                val badges = listOfNotNull(
-                    if (settings.inSensorZoomJpeg) "ISZ" else null,
-                    if (settings.dcgMode) "DCG" else null,
-                    if (settings.sensorShdr) "SHDR" else null,
-                )
-                badges.forEach { b ->
-                    Spacer(Modifier.width(6.dp))
-                    Text(b, color = LatentColors.AmberInk, fontSize = 9.sp, letterSpacing = 1.sp,
-                        modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).padding(horizontal = 6.dp, vertical = 2.dp))
-                }
-            }
-            Text("settings", color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.combinedClickable(onClick = onOpenSettings))
+            Text("LATENT", color = LatentColors.Text, fontSize = 12.sp, letterSpacing = 4.sp, fontWeight = FontWeight.Light)
+            Text(
+                if (drawerOpen) "︿" else "﹀", color = if (drawerOpen) LatentColors.Amber else LatentColors.TextBright, fontSize = 16.sp,
+                modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Surface).combinedClickable(onClick = { drawerOpen = !drawerOpen }).padding(horizontal = 14.dp, vertical = 2.dp),
+            )
+            Text("12.5M · " + (if (settings.saveJpeg) "RAW+JPG" else "RAW"), color = LatentColors.TextDim, fontSize = 11.sp)
+            Text("⚙", color = LatentColors.Text, fontSize = 18.sp, modifier = Modifier.combinedClickable(onClick = onOpenSettings).padding(4.dp))
         }
 
-        // Viewfinder: 3:4 box. Tap = focus at that point.
+        // ---- Viewfinder ----
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(3f / 4f)
-                .background(LatentColors.Surface)
-                .pointerInput(Unit) {
+            modifier = Modifier.fillMaxWidth().aspectRatio(3f / 4f).background(LatentColors.Surface)
+                .pointerInput(drawerOpen) {
                     detectTapGestures(
                         onTap = { pos ->
+                            if (drawerOpen) { drawerOpen = false; return@detectTapGestures }
                             focusTap = pos; focusTapAt = System.currentTimeMillis()
-                            if (controls.locked) { controller.unlock() }
+                            if (controls.locked) controller.unlock()
                             controller.tapFocus(pos.x / size.width, pos.y / size.height)
                             controls = controls.copy(focusDiopters = null, locked = false)
                         },
@@ -166,193 +206,161 @@ fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChange
                     )
                 },
         ) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    // TextureView applies the camera's rotation transform itself, so the first
-                    // frame is drawn with the right geometry (SurfaceView got this wrong on launch).
-                    TextureView(ctx).apply {
-                        surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                            override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
-                                val size = controller.previewSizeFor(lens)
-                                st.setDefaultBufferSize(size.width, size.height)
-                                val surf = Surface(st)
-                                surfaceRef = surf
-                                controller.open(lens, surf)
-                            }
-                            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {}
-                            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { surfaceRef = null; controller.close(); return true }
-                            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+            AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
+                TextureView(ctx).apply {
+                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
+                            val size = controller.previewSizeFor(lens)
+                            st.setDefaultBufferSize(size.width, size.height)
+                            val surf = Surface(st); surfaceRef = surf; controller.open(lens, surf)
                         }
+                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {}
+                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { surfaceRef = null; controller.close(); return true }
+                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
                     }
-                },
-            )
+                }
+            })
             if (settings.gridlines) {
                 Canvas(Modifier.fillMaxSize()) {
-                    val c = Color(0x66FFFFFF)
-                    val w = size.width; val h = size.height
-                    drawLine(c, Offset(w / 3, 0f), Offset(w / 3, h), 1f)
-                    drawLine(c, Offset(2 * w / 3, 0f), Offset(2 * w / 3, h), 1f)
-                    drawLine(c, Offset(0f, h / 3), Offset(w, h / 3), 1f)
-                    drawLine(c, Offset(0f, 2 * h / 3), Offset(w, 2 * h / 3), 1f)
+                    val c = Color(0x66FFFFFF); val w = size.width; val h = size.height
+                    drawLine(c, Offset(w / 3, 0f), Offset(w / 3, h), 1f); drawLine(c, Offset(2 * w / 3, 0f), Offset(2 * w / 3, h), 1f)
+                    drawLine(c, Offset(0f, h / 3), Offset(w, h / 3), 1f); drawLine(c, Offset(0f, 2 * h / 3), Offset(w, 2 * h / 3), 1f)
                 }
             }
             focusTap?.let { p ->
-                val d = LocalDensity.current
-                val boxPx = with(d) { 72.dp.toPx() }
-                Box(
-                    Modifier
-                        .offset { androidx.compose.ui.unit.IntOffset((p.x - boxPx / 2).toInt(), (p.y - boxPx / 2).toInt()) }
-                        .size(72.dp)
-                        .border(1.dp, LatentColors.Amber, RoundedCornerShape(4.dp)),
-                )
+                val boxPx = with(LocalDensity.current) { 72.dp.toPx() }
+                Box(Modifier.offset { IntOffset((p.x - boxPx / 2).toInt(), (p.y - boxPx / 2).toInt()) }.size(72.dp).border(1.dp, LatentColors.Amber, RoundedCornerShape(4.dp)))
             }
-            Text(
-                text = lens.name + (if (readout.afState.isNotEmpty()) " · AF " + readout.afState else ""),
-                color = LatentColors.Text, fontSize = 11.sp,
-                modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
-            )
-            if (controls.locked) {
-                Text(
-                    "AE/AF LOCK", color = LatentColors.AmberInk, fontSize = 11.sp, letterSpacing = 1.sp,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(8.dp).clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).padding(horizontal = 10.dp, vertical = 4.dp),
-                )
+            // Active mode tags, top-right inside the viewfinder.
+            Row(Modifier.align(Alignment.TopEnd).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOfNotNull(
+                    if (settings.inSensorZoomJpeg) "ISZ" else null, if (settings.dcgMode) "DCG" else null,
+                    if (settings.sensorShdr) "SHDR" else null, if (settings.burstMode) "BURST" else null,
+                    if (settings.timerSeconds > 0) "${settings.timerSeconds}s" else null,
+                ).forEach { Tag(it) }
             }
-        }
-
-        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center) {
-            // 2x request on any lens: digital crop unless a vendor tag / sensor mode makes it in-sensor.
-            run {
-                Text(
-                    text = "2x", color = if (controls.zoom == 2f) LatentColors.Amber else LatentColors.Text, fontSize = 13.sp,
-                    modifier = Modifier.padding(horizontal = 6.dp).clip(RoundedCornerShape(999.dp))
-                        .background(if (controls.zoom == 2f) LatentColors.Surface else LatentColors.Background)
-                        .combinedClickable(onClick = { push(controls.copy(zoom = if (controls.zoom == 2f) 1f else 2f)) })
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                )
+            if (controls.locked) Text("AE/AF LOCK", color = LatentColors.AmberInk, fontSize = 11.sp, letterSpacing = 1.sp,
+                modifier = Modifier.align(Alignment.TopCenter).padding(8.dp).clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).padding(horizontal = 10.dp, vertical = 4.dp))
+            if (countdown > 0) Text("$countdown", color = LatentColors.TextBright, fontSize = 64.sp, modifier = Modifier.align(Alignment.Center))
+            Text(lens.name + (if (readout.afState.isNotEmpty()) " · AF " + readout.afState else ""), color = LatentColors.Text, fontSize = 11.sp,
+                modifier = Modifier.align(Alignment.BottomStart).padding(8.dp))
+            // Lens chips inside the viewfinder, bottom-right (Xiaomi style). 2x = zoom request on the current lens.
+            Row(Modifier.align(Alignment.BottomEnd).padding(6.dp).clip(RoundedCornerShape(999.dp)).background(Color(0x66161615)).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Lenses.ALL.forEach { l ->
+                    Chip(l.label, l == lens && controls.zoom == 1f) {
+                        if (l != lens) { lens = l; push(controls.copy(shutterNs = null, iso = null, focusDiopters = null, zoom = 1f)); onLensChanged(l); reopen() }
+                        else if (controls.zoom != 1f) push(controls.copy(zoom = 1f))
+                    }
+                    if (l.physicalId == "2") Chip("2", controls.zoom == 2f && lens == l) {
+                        if (lens != l) { lens = l; onLensChanged(l); reopen() }
+                        push(controls.copy(shutterNs = null, iso = null, focusDiopters = null, zoom = 2f))
+                    }
+                }
             }
-            Lenses.ALL.forEach { l ->
-                LensChip(l, l == lens) {
-                    if (l != lens) {
-                        lens = l
-                        // Manual values may be out of range on the new lens; go back to auto for exposure and focus.
-                        push(controls.copy(shutterNs = null, iso = null, focusDiopters = null, zoom = 1f))
-                        onLensChanged(l)
-                        surfaceRef?.let { surf -> controller.open(l, surf) }
+            // Quick-settings drawer over the lower part of the viewfinder.
+            if (drawerOpen) {
+                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(8.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xEE2C2C2A)).padding(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Tile("In-sensor 2x", settings.inSensorZoomJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(inSensorZoomJpeg = it, saveJpeg = if (it) true else settings.saveJpeg)); reopen() }
+                        Tile("DCG", settings.dcgMode, Modifier.weight(1f)) { onSettingsChange(settings.copy(dcgMode = it)); reopen() }
+                        Tile("Staggered HDR", settings.sensorShdr, Modifier.weight(1f)) { onSettingsChange(settings.copy(sensorShdr = it)); reopen() }
+                        Tile("RAW + JPEG", settings.saveJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(saveJpeg = it, inSensorZoomJpeg = if (!it) false else settings.inSensorZoomJpeg)); reopen() }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Tile("Gridlines", settings.gridlines, Modifier.weight(1f)) { onSettingsChange(settings.copy(gridlines = it)) }
+                        Tile(if (settings.timerSeconds == 0) "Timer off" else "Timer ${settings.timerSeconds}s", settings.timerSeconds > 0, Modifier.weight(1f)) {
+                            onSettingsChange(settings.copy(timerSeconds = when (settings.timerSeconds) { 0 -> 3; 3 -> 10; else -> 0 }))
+                        }
+                        Tile("Burst 16", settings.burstMode, Modifier.weight(1f)) { onSettingsChange(settings.copy(burstMode = it)) }
+                        Tile("All settings", false, Modifier.weight(1f)) { drawerOpen = false; onOpenSettings() }
                     }
                 }
             }
         }
 
-        // ---- Control strip -------------------------------------------------------------
+        // ---- Control strip ----
         val evStr = if (controls.manualExposure) "—" else String.format("%+.1f", controls.evIndex / 6.0).replace("+0.0", "0.0")
         val sStr = ControlMath.shutterLabel(controls.shutterNs ?: readout.shutterNs)
         val isoStr = (controls.iso ?: readout.iso).takeIf { it > 0 }?.toString() ?: "—"
         val wbStr = controls.kelvin?.let { "${it}K" } ?: if (kelvinShown > 0) "${kelvinShown}K" else "—"
         val fStr = if (controls.focusDiopters == null) "AF" else focusLabel(controls.focusDiopters!!)
-
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-            StripCell("EV", evStr, auto = false, selected = selected == Cell.EV, dim = controls.manualExposure, Modifier.weight(1f)) { selected = if (selected == Cell.EV) null else Cell.EV }
-            StripCell("S", sStr, auto = controls.shutterNs == null, selected = selected == Cell.S, dim = false, Modifier.weight(1f)) { selected = if (selected == Cell.S) null else Cell.S }
-            StripCell("ISO", isoStr, auto = controls.iso == null, selected = selected == Cell.ISO, dim = false, Modifier.weight(1f)) { selected = if (selected == Cell.ISO) null else Cell.ISO }
-            StripCell("WB", wbStr, auto = controls.kelvin == null, selected = selected == Cell.WB, dim = false, Modifier.weight(1f)) { selected = if (selected == Cell.WB) null else Cell.WB }
-            StripCell("F", fStr, auto = controls.focusDiopters == null, selected = selected == Cell.F, dim = false, Modifier.weight(1f)) { selected = if (selected == Cell.F) null else Cell.F }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+            StripCell("EV", evStr, false, selected == Cell.EV, controls.manualExposure, Modifier.weight(1f)) { selected = if (selected == Cell.EV) null else Cell.EV }
+            StripCell("S", sStr, controls.shutterNs == null, selected == Cell.S, false, Modifier.weight(1f)) { selected = if (selected == Cell.S) null else Cell.S }
+            StripCell("ISO", isoStr, controls.iso == null, selected == Cell.ISO, false, Modifier.weight(1f)) { selected = if (selected == Cell.ISO) null else Cell.ISO }
+            StripCell("WB", wbStr, controls.kelvin == null, selected == Cell.WB, false, Modifier.weight(1f)) { selected = if (selected == Cell.WB) null else Cell.WB }
+            StripCell("F", fStr, controls.focusDiopters == null, selected == Cell.F, false, Modifier.weight(1f)) { selected = if (selected == Cell.F) null else Cell.F }
         }
-
-        // Slider for the selected cell.
-        Box(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
             when (selected) {
-                Cell.EV -> {
-                    val r = if (controller.hasCharacteristics) controller.evRange else android.util.Range(-24, 24)
-                    StripSlider(
-                        value = controls.evIndex.toFloat(), min = r.lower.toFloat(), max = r.upper.toFloat(), steps = (r.upper - r.lower - 1).coerceAtLeast(0),
-                        onChange = { push(controls.copy(evIndex = Math.round(it))) },
-                        onAuto = { push(controls.copy(evIndex = 0)) }, autoLabel = "0",
-                        enabled = !controls.manualExposure,
-                    )
-                }
-                Cell.S -> {
-                    val presets = if (controller.hasCharacteristics) ControlMath.shutterPresets(controller.shutterRange.lower, controller.shutterRange.upper) else listOf(10_000_000L)
-                    val cur = controls.shutterNs ?: readout.shutterNs
-                    val idx = presets.indices.minByOrNull { Math.abs(presets[it] - cur) } ?: 0
-                    StripSlider(
-                        value = idx.toFloat(), min = 0f, max = (presets.size - 1).toFloat(), steps = (presets.size - 2).coerceAtLeast(0),
-                        onChange = { push(controls.copy(shutterNs = presets[Math.round(it).coerceIn(0, presets.size - 1)])) },
-                        onAuto = { push(controls.copy(shutterNs = null)) }, autoLabel = "A",
-                    )
-                }
-                Cell.ISO -> {
-                    val presets = if (controller.hasCharacteristics) ControlMath.isoPresets(controller.isoRange.lower, controller.isoRange.upper) else listOf(100)
-                    val cur = controls.iso ?: readout.iso
-                    val idx = presets.indices.minByOrNull { Math.abs(presets[it] - cur) } ?: 0
-                    StripSlider(
-                        value = idx.toFloat(), min = 0f, max = (presets.size - 1).toFloat(), steps = (presets.size - 2).coerceAtLeast(0),
-                        onChange = { push(controls.copy(iso = presets[Math.round(it).coerceIn(0, presets.size - 1)])) },
-                        onAuto = { push(controls.copy(iso = null)) }, autoLabel = "A",
-                    )
-                }
-                Cell.WB -> {
-                    val cur = controls.kelvin ?: (if (kelvinShown > 0) kelvinShown else 5200)
-                    StripSlider(
-                        value = cur.toFloat(), min = 2000f, max = 10000f, steps = 79,
-                        onChange = { push(controls.copy(kelvin = (Math.round(it / 100f) * 100))) },
-                        onAuto = { push(controls.copy(kelvin = null)) }, autoLabel = "A",
-                    )
-                }
-                Cell.F -> {
-                    val maxD = if (controller.hasCharacteristics) controller.minFocusDiopters else 10f
-                    val cur = controls.focusDiopters ?: readout.focusDiopters
-                    // Slider runs infinity (left) to closest (right).
-                    StripSlider(
-                        value = cur.coerceIn(0f, maxD), min = 0f, max = maxD, steps = 0,
-                        onChange = { push(controls.copy(focusDiopters = it)) },
-                        onAuto = { push(controls.copy(focusDiopters = null)) }, autoLabel = "AF",
-                    )
-                }
-                null -> Text(status, color = LatentColors.Text, fontSize = 11.sp, lineHeight = 14.sp, modifier = Modifier.fillMaxWidth())
+                Cell.EV -> { val r = if (controller.hasCharacteristics) controller.evRange else android.util.Range(-24, 24)
+                    StripSlider(controls.evIndex.toFloat(), r.lower.toFloat(), r.upper.toFloat(), (r.upper - r.lower - 1).coerceAtLeast(0), { push(controls.copy(evIndex = Math.round(it))) }, { push(controls.copy(evIndex = 0)) }, "0", !controls.manualExposure) }
+                Cell.S -> { val presets = if (controller.hasCharacteristics) ControlMath.shutterPresets(controller.shutterRange.lower, controller.shutterRange.upper) else listOf(10_000_000L)
+                    val cur = controls.shutterNs ?: readout.shutterNs; val idx = presets.indices.minByOrNull { Math.abs(presets[it] - cur) } ?: 0
+                    StripSlider(idx.toFloat(), 0f, (presets.size - 1).toFloat(), (presets.size - 2).coerceAtLeast(0), { push(controls.copy(shutterNs = presets[Math.round(it).coerceIn(0, presets.size - 1)])) }, { push(controls.copy(shutterNs = null)) }, "A") }
+                Cell.ISO -> { val presets = if (controller.hasCharacteristics) ControlMath.isoPresets(controller.isoRange.lower, controller.isoRange.upper) else listOf(100)
+                    val cur = controls.iso ?: readout.iso; val idx = presets.indices.minByOrNull { Math.abs(presets[it] - cur) } ?: 0
+                    StripSlider(idx.toFloat(), 0f, (presets.size - 1).toFloat(), (presets.size - 2).coerceAtLeast(0), { push(controls.copy(iso = presets[Math.round(it).coerceIn(0, presets.size - 1)])) }, { push(controls.copy(iso = null)) }, "A") }
+                Cell.WB -> { val cur = controls.kelvin ?: (if (kelvinShown > 0) kelvinShown else 5200)
+                    StripSlider(cur.toFloat(), 2000f, 10000f, 79, { push(controls.copy(kelvin = Math.round(it / 100f) * 100)) }, { push(controls.copy(kelvin = null)) }, "A") }
+                Cell.F -> { val maxD = if (controller.hasCharacteristics) controller.minFocusDiopters else 10f
+                    StripSlider((controls.focusDiopters ?: readout.focusDiopters).coerceIn(0f, maxD), 0f, maxD, 0, { push(controls.copy(focusDiopters = it)) }, { push(controls.copy(focusDiopters = null)) }, "AF") }
+                null -> Text(status, color = LatentColors.TextDim, fontSize = 10.sp, lineHeight = 13.sp, modifier = Modifier.fillMaxWidth())
             }
         }
 
-        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        // ---- Shutter row: thumbnail · shutter · mode hint ----
+        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)).background(LatentColors.Surface).border(0.5.dp, LatentColors.Line, RoundedCornerShape(8.dp))
+                .combinedClickable(onClick = {
+                    lastUri?.let { uri ->
+                        val view = Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, context.contentResolver.getType(uri) ?: "image/*"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                        runCatching { context.startActivity(view) }
+                    }
+                })) {
+                thumb?.let { Image(it.asImageBitmap(), contentDescription = "Last photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+            }
             Box(
-                modifier = Modifier
-                    .size(76.dp)
-                    .clip(CircleShape)
-                    .border(3.dp, LatentColors.TextBright, CircleShape)
-                    .combinedClickable(onClick = { controller.captureSingle() }, onLongClick = { controller.captureBurst(16) }),
+                Modifier.size(76.dp).clip(CircleShape).border(3.dp, LatentColors.TextBright, CircleShape)
+                    .combinedClickable(onClick = { shoot(single = !settings.burstMode) }, onLongClick = { shoot(single = settings.burstMode) }),
                 contentAlignment = Alignment.Center,
-            ) { Box(Modifier.size(58.dp).clip(CircleShape).background(LatentColors.TextBright)) }
+            ) { Box(Modifier.size(58.dp).clip(CircleShape).background(if (settings.burstMode) LatentColors.Amber else LatentColors.TextBright)) }
+            Text(if (settings.burstMode) "tap = burst\nhold = single" else "tap = single\nhold = burst", color = LatentColors.TextDim, fontSize = 10.sp, lineHeight = 12.sp, modifier = Modifier.width(48.dp))
         }
-
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = if (selected == null) log else status,
-            color = LatentColors.TextDim, fontSize = 10.sp, lineHeight = 13.sp, fontFamily = FontFamily.Monospace,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        )
+        Text(log, color = LatentColors.TextDim, fontSize = 9.sp, lineHeight = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
     }
 }
 
-private fun focusLabel(d: Float): String = when {
-    d <= 0.05f -> "∞"
-    d < 1f -> String.format("%.1fm", 1 / d)
-    else -> String.format("%.0fcm", 100 / d)
+@Composable
+private fun Tag(t: String) {
+    Text(t, color = LatentColors.AmberInk, fontSize = 9.sp, letterSpacing = 1.sp,
+        modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).padding(horizontal = 6.dp, vertical = 2.dp))
 }
 
 @Composable
+private fun Chip(label: String, on: Boolean, onClick: () -> Unit) {
+    Text(label, color = if (on) LatentColors.Amber else LatentColors.TextBright, fontSize = 12.sp,
+        modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(if (on) LatentColors.Surface else Color.Transparent).combinedClickable(onClick = onClick).padding(horizontal = 9.dp, vertical = 6.dp))
+}
+
+@Composable
+private fun Tile(label: String, on: Boolean, modifier: Modifier, onToggle: (Boolean) -> Unit) {
+    Box(
+        modifier.height(52.dp).clip(RoundedCornerShape(8.dp)).background(if (on) LatentColors.Amber else LatentColors.Line).combinedClickable(onClick = { onToggle(!on) }).padding(4.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(label, color = if (on) LatentColors.AmberInk else LatentColors.TextBright, fontSize = 10.sp, lineHeight = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
+}
+
+private fun focusLabel(d: Float): String = when { d <= 0.05f -> "∞"; d < 1f -> String.format("%.1fm", 1 / d); else -> String.format("%.0fcm", 100 / d) }
+
+@Composable
 private fun StripCell(label: String, value: String, auto: Boolean, selected: Boolean, dim: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    Column(
-        modifier = modifier.combinedClickable(onClick = onClick).padding(vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Column(modifier.combinedClickable(onClick = onClick).padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(value, color = if (dim) LatentColors.Line else if (selected) LatentColors.Amber else LatentColors.TextBright, fontSize = 14.sp)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, color = LatentColors.TextDim, fontSize = 10.sp)
-            if (auto) {
-                Spacer(Modifier.width(3.dp))
-                Text("A", color = LatentColors.TextDim, fontSize = 8.sp,
-                    modifier = Modifier.border(0.5.dp, LatentColors.TextDim, CircleShape).padding(horizontal = 3.dp))
-            }
+            if (auto) { Spacer(Modifier.width(3.dp)); Text("A", color = LatentColors.TextDim, fontSize = 8.sp, modifier = Modifier.border(0.5.dp, LatentColors.TextDim, CircleShape).padding(horizontal = 3.dp)) }
         }
     }
 }
@@ -360,30 +368,9 @@ private fun StripCell(label: String, value: String, auto: Boolean, selected: Boo
 @Composable
 private fun StripSlider(value: Float, min: Float, max: Float, steps: Int, onChange: (Float) -> Unit, onAuto: () -> Unit, autoLabel: String, enabled: Boolean = true) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            autoLabel, color = LatentColors.AmberInk, fontSize = 11.sp,
-            modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).combinedClickable(onClick = onAuto).padding(horizontal = 10.dp, vertical = 4.dp),
-        )
+        Text(autoLabel, color = LatentColors.AmberInk, fontSize = 11.sp, modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).combinedClickable(onClick = onAuto).padding(horizontal = 10.dp, vertical = 4.dp))
         Spacer(Modifier.width(12.dp))
-        Slider(
-            value = value.coerceIn(min, max), onValueChange = onChange, valueRange = min..max, steps = steps, enabled = enabled,
-            colors = SliderDefaults.colors(thumbColor = LatentColors.Amber, activeTrackColor = LatentColors.Amber, inactiveTrackColor = LatentColors.Line),
-            modifier = Modifier.weight(1f),
-        )
+        Slider(value = value.coerceIn(min, max), onValueChange = onChange, valueRange = min..max, steps = steps, enabled = enabled,
+            colors = SliderDefaults.colors(thumbColor = LatentColors.Amber, activeTrackColor = LatentColors.Amber, inactiveTrackColor = LatentColors.Line), modifier = Modifier.weight(1f))
     }
-}
-
-@Composable
-private fun LensChip(l: Lens, selected: Boolean, onClick: () -> Unit) {
-    Text(
-        text = l.label,
-        color = if (selected) LatentColors.Amber else LatentColors.Text,
-        fontSize = 13.sp,
-        modifier = Modifier
-            .padding(horizontal = 6.dp)
-            .clip(RoundedCornerShape(999.dp))
-            .background(if (selected) LatentColors.Surface else LatentColors.Background)
-            .combinedClickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-    )
 }

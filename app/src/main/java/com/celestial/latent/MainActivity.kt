@@ -128,6 +128,7 @@ private fun Root() {
         )
         else -> CameraScreen(
             settings = settings,
+            onSettingsChange = { s -> settings = s; AppSettings.save(context, s) },
             onOpenSettings = { screen = "settings" },
             onLensChanged = { l -> if (settings.rememberLens) { settings = settings.copy(defaultLensId = l.physicalId); AppSettings.save(context, settings) } },
             onController = { c -> controllerRef = c },
