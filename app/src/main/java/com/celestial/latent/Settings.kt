@@ -23,6 +23,7 @@ data class AppSettings(
     val cameraPath: String = "0",       // logical camera ID to route through ("0", "6", "7"...) or "direct"
     val opmode: Int = 0,                // vendor session operating mode; 0 = regular
     val vendorTags: List<VendorTag> = emptyList(),
+    val inSensorZoomJpeg: Boolean = false,  // Qualcomm EnableInsensorZoom: native-crop JPEG at 2x (RAW stays 1x for now)
 ) {
     companion object {
         const val ANTIBANDING_OFF = 0
@@ -45,6 +46,7 @@ data class AppSettings(
                 cameraPath = p.getString("cameraPath", if (p.getBoolean("directOpen", false)) "direct" else "0") ?: "0",
                 opmode = p.getInt("opmode", 0),
                 vendorTags = (p.getString("vendorTags", "") ?: "").split("\n").mapNotNull { VendorTag.decode(it) },
+                inSensorZoomJpeg = p.getBoolean("inSensorZoomJpeg", false),
             )
         }
 
@@ -60,6 +62,7 @@ data class AppSettings(
                 .putString("cameraPath", s.cameraPath)
                 .putInt("opmode", s.opmode)
                 .putString("vendorTags", s.vendorTags.joinToString("\n") { it.encode() })
+                .putBoolean("inSensorZoomJpeg", s.inSensorZoomJpeg)
                 .apply()
         }
     }

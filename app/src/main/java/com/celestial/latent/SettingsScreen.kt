@@ -61,6 +61,9 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
         ) { onChange(settings.copy(saveJpeg = it)) }
 
         Section("Shooting")
+        ToggleRow("2x in-sensor zoom (JPEG)", "Uses the sensor's native centre crop for the 2x JPEG on lenses that support it. Turns on RAW + JPEG. The RAW file stays 1x for now.", settings.inSensorZoomJpeg) {
+            onChange(settings.copy(inSensorZoomJpeg = it, saveJpeg = if (it) true else settings.saveJpeg))
+        }
         ToggleRow("Volume buttons take the photo", "Either volume key acts as the shutter", settings.volumeShutter) { onChange(settings.copy(volumeShutter = it)) }
         ToggleRow("Remember last lens", "Open on the lens you used last time", settings.rememberLens) { onChange(settings.copy(rememberLens = it)) }
         OptionRow(

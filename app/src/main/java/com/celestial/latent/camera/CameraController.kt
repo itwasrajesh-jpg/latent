@@ -73,6 +73,11 @@ class CameraController(
     /** Vendor overrides (MotionCam-style). Applied at session creation / in every request. */
     @Volatile var opmode: Int = 0
     @Volatile var vendorTags: List<VendorTagSpec> = emptyList()
+    /** Built-in feature: Qualcomm in-sensor zoom for the JPEG path. */
+    @Volatile var inSensorZoomJpeg = false
+    private val ISZ_KEY = "org.codeaurora.qcamera3.sessionParameters.EnableInsensorZoom"
+    private fun allTags(): List<VendorTagSpec> =
+        if (inSensorZoomJpeg && vendorTags.none { it.name == ISZ_KEY }) vendorTags + VendorTagSpec(ISZ_KEY, "session", "i32", "1") else vendorTags
     @Volatile var onVendorEcho: (String) -> Unit = {}
     private lateinit var physChars: CameraCharacteristics
     private var rawSize = Size(4096, 3072)
@@ -177,7 +182,7 @@ class CameraController(
             }
         })
         try {
-            val sessionTags = vendorTags.filter { it.scope == "session" && it.name.isNotBlank() }
+            val sessionTags = allTags().filter { it.scope == "session" && it.name.isNotBlank() }
             if (sessionTags.isNotEmpty()) {
                 val sp = dev.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                 sessionTags.forEach { applyVendorTag(sp, it) }
@@ -299,7 +304,7 @@ class CameraController(
             if (modes.contains(CameraMetadata.HOT_PIXEL_MODE_HIGH_QUALITY)) b.set(CaptureRequest.HOT_PIXEL_MODE, CameraMetadata.HOT_PIXEL_MODE_HIGH_QUALITY)
         }
         // Vendor tags: session-scoped ones are sent again in requests too (harmless, and some HALs read them there).
-        vendorTags.filter { it.name.isNotBlank() }.forEach { applyVendorTag(b, it) }
+        allTags().filter { it.name.isNotBlank() }.forEach { applyVendorTag(b, it) }
         // White balance
         val k = c.kelvin
         if (k != null) {
@@ -444,7 +449,7 @@ class CameraController(
                 if (baseNames.size > 8) baseNames.remove(baseNames.keys.minOrNull()!!)
                 val name = "$base.dng"
                 val ms = writeDngCreator(img, result, name)
-                metaFor(result).get(CaptureResult.SCALER_CROP_REGION)?.let { cr -> if (controls.zoom != 1f) log("zoom ${controls.zoom}x → crop region ${cr.width()}x${cr.height()}@${cr.left},${cr.top} (full frame = in-sensor, quarter = digital)") }
+                if (controls.zoom != 1f) log("2x: JPEG ${if (inSensorZoomJpeg) "in-sensor crop" else "digital crop"} · RAW is the full 1x frame")
                 val took = t0?.let { (System.nanoTime() - it) / 1_000_000 } ?: -1
                 status("Saved $name (${img.width}x${img.height}) · shutter→file ${took} ms · write $ms ms")
             } else {
