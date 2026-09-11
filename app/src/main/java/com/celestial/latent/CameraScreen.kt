@@ -112,7 +112,19 @@ fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChange
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("LATENT", color = LatentColors.Text, fontSize = 13.sp, letterSpacing = 4.sp, fontWeight = FontWeight.Light)
-            Text("12.5M · " + (if (settings.saveJpeg) "RAW+JPG" else "RAW") + " · v" + BuildConfig.VERSION_NAME, color = LatentColors.TextDim, fontSize = 11.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("12.5M · " + (if (settings.saveJpeg) "RAW+JPG" else "RAW") + " · v" + BuildConfig.VERSION_NAME, color = LatentColors.TextDim, fontSize = 11.sp)
+                val badges = listOfNotNull(
+                    if (settings.inSensorZoomJpeg) "ISZ" else null,
+                    if (settings.dcgMode) "DCG" else null,
+                    if (settings.sensorShdr) "SHDR" else null,
+                )
+                badges.forEach { b ->
+                    Spacer(Modifier.width(6.dp))
+                    Text(b, color = LatentColors.AmberInk, fontSize = 9.sp, letterSpacing = 1.sp,
+                        modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).padding(horizontal = 6.dp, vertical = 2.dp))
+                }
+            }
             Text("settings", color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.combinedClickable(onClick = onOpenSettings))
         }
 

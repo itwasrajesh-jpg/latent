@@ -580,7 +580,7 @@ class CameraController(
 
     /** Reads back every configured tag from the capture result so the user can see what the driver actually did. */
     private fun echoVendorTags(result: TotalCaptureResult) {
-        val tags = vendorTags.filter { it.name.isNotBlank() }
+        val tags = allTags().filter { it.name.isNotBlank() }
         if (tags.isEmpty() && opmode == 0) return
         val sb = StringBuilder()
         if (opmode != 0) sb.appendLine("opmode 0x${Integer.toHexString(opmode)} · session ${if (directOpen) "direct" else "via $logicalId"}")
