@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -100,6 +101,11 @@ private fun Root() {
         }
         return
     }
+    // System back gesture: always one step up, never out of the app while inside a sub-screen.
+    BackHandler(enabled = screen != "camera") {
+        screen = if (screen == "settings") "camera" else "settings"
+    }
+
     when (screen) {
         "report" -> ReportScreen(onBack = { screen = "settings" })
         "settings" -> SettingsScreen(

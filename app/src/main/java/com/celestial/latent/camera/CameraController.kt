@@ -486,8 +486,8 @@ class CameraController(
                 saveTo(avgName) { DngWriter.write(it, meta, pixels) }
                 val wms = (System.nanoTime() - t) / 1_000_000
                 status("Burst: ${job.received}/${job.frames} frames (${job.failed} failed) · sensor span $sensorMs ms · total $wallMs ms · saved ${job.firstName} + $avgName (write $wms ms)")
-                onLog("burst frame timestamps ms from first: " + job.tsList.joinToString { ((it - job.firstTs) / 1_000_000).toString() })
-                onLog("alignment shifts px (accepted tiles): " + job.shifts.joinToString(" ") + " · overall ${job.tilesAccepted}/${job.tilesTotal} tiles used")
+                log("burst frame timestamps ms from first: " + job.tsList.joinToString { ((it - job.firstTs) / 1_000_000).toString() })
+                log("alignment shifts px (accepted tiles): " + job.shifts.joinToString(" ") + " · overall ${job.tilesAccepted}/${job.tilesTotal} tiles used")
             } catch (e: Exception) { status("burst save failed: ${e.message}"); Log.e("Latent", "burst", e) }
         }
     }
