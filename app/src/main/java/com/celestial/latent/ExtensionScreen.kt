@@ -194,6 +194,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
                             resolver.openOutputStream(uri)!!.use { it.write(bytes) }
                             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0); resolver.update(uri, values, null, null)
                             onStatus("Saved $name (${bytes.size / 1024} KB, ${img.width}x${img.height})")
+                            android.util.Log.i("Latent", "extension saved $name ${img.width}x${img.height} ${bytes.size / 1024} KB zoom=$zoom")
                             onSaved(uri)
                         } catch (e: Exception) { onStatus("save failed: ${e.message}") } finally { img.close() }
                     }
@@ -227,6 +228,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
         val s = session ?: return@post; val dev = device ?: return@post; val r = reader ?: return@post
         try {
             val req = dev.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply { addTarget(r.surface); set(CaptureRequest.JPEG_ORIENTATION, 90); set(CaptureRequest.JPEG_QUALITY, 100.toByte()); applyAllowed(this) }
+            android.util.Log.i("Latent", "extension capture: ${extName(extension)} zoom=$zoom ev=$evIndex isz=$isz")
             s.capture(req.build(), executor, object : CameraExtensionSession.ExtensionCaptureCallback() {
                 override fun onCaptureFailed(sess: CameraExtensionSession, request: CaptureRequest) { onStatus("capture failed") }
                 override fun onCaptureProcessStarted(sess: CameraExtensionSession, request: CaptureRequest) { onStatus("Processing…") }
@@ -235,7 +237,11 @@ class ExtensionCamera(private val context: android.content.Context, private val 
     }
 
     fun switchTo(ext: Int) { extension = ext; openOnTexture() }
-    fun applyZoom(z: Float) { zoom = z; refresh() }
+    fun applyZoom(z: Float) {
+        zoom = z
+        // Night honours a live zoom change; Auto/Portrait only read zoom when the session is created.
+        if (extension == CameraExtensionCharacteristics.EXTENSION_NIGHT) refresh() else openOnTexture()
+    }
     fun close() = handler.post { closeInternal() }
     private fun closeInternal() {
         try { session?.close() } catch (_: Exception) {}; session = null
@@ -308,10 +314,10 @@ fun ExtensionScreen(onBack: () -> Unit) {
             caps?.let { c -> Text(listOfNotNull(if (c.zoom) "ZOOM" else null, if (c.ev) "EV" else null, if (c.manual) "MANUAL" else null, if (c.afRegions) "TAP-AF" else null, if (c.isz) "ISZ" else null).ifEmpty { listOf("AUTO ONLY") }.joinToString(" · "),
                 color = LatentColors.Amber, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) }
             if (zoomOk) Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp), verticalAlignment = Alignment.CenterVertically) {
-                listOf(0.6f, 1f, 2f, 3f, 4.3f).forEach { z ->
+                listOf(0.6f, 1f, 2f, 3f, 4.3f, 6f, 8.6f).forEach { z ->
                     val on = zoom == z
                     Text(if (on) "${z}×".replace(".0×", "×") else "$z".removeSuffix(".0"), color = if (on) LatentColors.TextBright else LatentColors.Text, fontSize = if (on) 15.sp else 12.sp,
-                        modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); zoom = z; cam.applyZoom(z) }).padding(horizontal = 11.dp, vertical = 6.dp))
+                        modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); zoom = z; cam.applyZoom(z) }).padding(horizontal = 8.dp, vertical = 6.dp))
                 }
                 if (caps?.isz == true) Text(if (iszOn) "ISZ" else "isz", color = if (iszOn) LatentColors.AmberInk else LatentColors.Amber, fontSize = 11.sp,
                     modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(999.dp)).background(if (iszOn) LatentColors.Amber else androidx.compose.ui.graphics.Color.Transparent).border(0.5.dp, LatentColors.Amber, RoundedCornerShape(999.dp))
