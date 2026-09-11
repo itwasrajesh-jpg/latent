@@ -127,10 +127,12 @@ class CameraController(
             rawReader = ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 6).also {
                 it.setOnImageAvailableListener({ r -> onRawImage(r) }, handler)
             }
-            val jpegSize = map.getOutputSizes(ImageFormat.JPEG).maxByOrNull { it.width.toLong() * it.height } ?: rawSize
-            jpegReader = ImageReader.newInstance(jpegSize.width, jpegSize.height, ImageFormat.JPEG, 2).also {
-                it.setOnImageAvailableListener({ r -> onJpegImage(r) }, handler)
-            }
+            jpegReader = if (saveJpeg) {
+                val jpegSize = map.getOutputSizes(ImageFormat.JPEG).maxByOrNull { it.width.toLong() * it.height } ?: rawSize
+                ImageReader.newInstance(jpegSize.width, jpegSize.height, ImageFormat.JPEG, 2).also {
+                    it.setOnImageAvailableListener({ r -> onJpegImage(r) }, handler)
+                }
+            } else null
             oisAvailable = physChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true
             status("Opening ${lens.name} (${lens.label}) · RAW ${rawSize.width}x${rawSize.height}")
             val idToOpen = if (directOpen) lens.physicalId else logicalId
@@ -150,17 +152,13 @@ class CameraController(
         val dev = device ?: return
         val prev = previewSurface ?: return
         val reader = rawReader ?: return
-        val jpeg = jpegReader ?: return
-        val outPrev = OutputConfiguration(prev)
-        val outRaw = OutputConfiguration(reader.surface)
-        val outJpeg = OutputConfiguration(jpeg.surface)
-        if (!directOpen) {
-            outPrev.setPhysicalCameraId(lens.physicalId)
-            outRaw.setPhysicalCameraId(lens.physicalId)
-            outJpeg.setPhysicalCameraId(lens.physicalId)
-        }
+        val outputs = ArrayList<OutputConfiguration>()
+        outputs += OutputConfiguration(prev)
+        outputs += OutputConfiguration(reader.surface)
+        jpegReader?.let { outputs += OutputConfiguration(it.surface) }
+        if (!directOpen) outputs.forEach { it.setPhysicalCameraId(lens.physicalId) }
         val sessionType = if (opmode != 0) opmode else SessionConfiguration.SESSION_REGULAR
-        val config = SessionConfiguration(sessionType, listOf(outPrev, outRaw, outJpeg), executor, object : CameraCaptureSession.StateCallback() {
+        val config = SessionConfiguration(sessionType, outputs, executor, object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(s: CameraCaptureSession) { session = s; startPreview() }
             override fun onConfigureFailed(s: CameraCaptureSession) {
                 if (!directOpen) {
@@ -198,7 +196,7 @@ class CameraController(
         }
         try {
             s.setRepeatingRequest(req.build(), previewCallback, handler)
-            status("${lens.name} · ${lens.label} · ${if (directOpen) "direct" else "via logical 0"} · ${if (oisAvailable) "OIS on" else "no OIS"} · tap = RAW, hold = burst")
+            status("${lens.name} · ${lens.label} · ${if (directOpen) "direct" else "via $logicalId"} · ${if (oisAvailable) "OIS on" else "no OIS"} · streams: preview+RAW${if (jpegReader != null) "+JPEG" else ""} · tap = RAW, hold = burst")
         } catch (e: Exception) { status("preview failed: ${e.message}") }
     }
 

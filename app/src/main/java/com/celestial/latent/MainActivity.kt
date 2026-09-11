@@ -43,6 +43,7 @@ import com.celestial.latent.ui.LatentTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLog.install(this)
         enableEdgeToEdge()
         setContent { LatentTheme { Root() } }
     }
@@ -63,7 +64,27 @@ private fun Root() {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
     val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> granted = ok }
+    var crash by remember { mutableStateOf(CrashLog.read(context)) }
     var screen by remember { mutableStateOf("camera") }
+    crash?.let { text ->
+        Column(Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().navigationBarsPadding().padding(16.dp)) {
+            Text("Latent crashed last time", color = LatentColors.TextBright, fontSize = 18.sp)
+            Spacer(Modifier.height(8.dp))
+            Row {
+                Button(onClick = {
+                    val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, text) }
+                    context.startActivity(Intent.createChooser(send, "Share crash"))
+                }, colors = ButtonDefaults.buttonColors(containerColor = LatentColors.Amber, contentColor = LatentColors.AmberInk)) { Text("Share") }
+                Spacer(Modifier.width(12.dp))
+                Button(onClick = { CrashLog.clear(context); crash = null },
+                    colors = ButtonDefaults.buttonColors(containerColor = LatentColors.Surface, contentColor = LatentColors.TextBright)) { Text("Dismiss") }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(text, color = LatentColors.Text, fontSize = 10.sp, lineHeight = 13.sp, fontFamily = FontFamily.Monospace,
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()))
+        }
+        return
+    }
     var settings by remember { mutableStateOf(AppSettings.load(context)) }
     var controllerRef by remember { mutableStateOf<com.celestial.latent.camera.CameraController?>(null) }
     var vendorEcho by remember { mutableStateOf("") }
