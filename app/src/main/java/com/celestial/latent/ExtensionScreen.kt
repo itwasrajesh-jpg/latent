@@ -61,7 +61,13 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executor
 
-/** Minimal Camera Extensions client: Xiaomi's own BOKEH / NIGHT processing, JPEG out. API 31+. */
+private fun extName(ext: Int) = when (ext) {
+    CameraExtensionCharacteristics.EXTENSION_BOKEH -> "PORTRAIT"
+    CameraExtensionCharacteristics.EXTENSION_NIGHT -> "NIGHT"
+    else -> "AUTO"
+}
+
+/** Minimal Camera Extensions client: Xiaomi's own BOKEH / NIGHT / AUTOMATIC processing, JPEG out. API 31+. */
 @RequiresApi(31)
 class ExtensionCamera(private val context: android.content.Context, private val onStatus: (String) -> Unit) {
     private val cm = context.getSystemService(android.content.Context.CAMERA_SERVICE) as CameraManager
@@ -115,7 +121,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
                     rr.acquireNextImage()?.let { img ->
                         try {
                             val buf = img.planes[0].buffer; val bytes = ByteArray(buf.remaining()); buf.get(bytes)
-                            val name = "LATENT_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + "_" + (if (extension == CameraExtensionCharacteristics.EXTENSION_BOKEH) "PORTRAIT" else "NIGHT") + ".jpg"
+                            val name = "LATENT_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + "_" + extName(extension) + ".jpg"
                             val values = ContentValues().apply {
                                 put(MediaStore.Images.Media.DISPLAY_NAME, name); put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
                                 put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Latent"); put(MediaStore.Images.Media.IS_PENDING, 1)
@@ -129,7 +135,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
                     }
                 }, handler)
             }
-            onStatus("Opening camera 0 with ${if (extension == CameraExtensionCharacteristics.EXTENSION_BOKEH) "BOKEH" else "NIGHT"}…")
+            onStatus("Opening camera 0 with ${extName(extension)}…")
             cm.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(cam: CameraDevice) {
                     device = cam
@@ -140,7 +146,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
                                 try {
                                     val req = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(surface); if (zoom != 1f && zoomSupported()) set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom) }
                                     s.setRepeatingRequest(req.build(), executor, object : CameraExtensionSession.ExtensionCaptureCallback() {})
-                                    onStatus("Ready · ${if (extension == CameraExtensionCharacteristics.EXTENSION_BOKEH) "Portrait" else "Night"} · tap the shutter")
+                                    onStatus("Ready · ${extName(extension)} · tap the shutter")
                                 } catch (e: Exception) { onStatus("preview: ${e.message}") }
                             }
                             override fun onConfigureFailed(s: CameraExtensionSession) { onStatus("Extension session refused") }
@@ -194,7 +200,7 @@ fun ExtensionScreen(onBack: () -> Unit) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("‹ settings", color = LatentColors.Text, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onBack))
             Row {
-                listOf("Portrait" to CameraExtensionCharacteristics.EXTENSION_BOKEH, "Night" to CameraExtensionCharacteristics.EXTENSION_NIGHT).forEach { (label, ext) ->
+                listOf("Portrait" to CameraExtensionCharacteristics.EXTENSION_BOKEH, "Night" to CameraExtensionCharacteristics.EXTENSION_NIGHT, "Auto" to CameraExtensionCharacteristics.EXTENSION_AUTOMATIC).forEach { (label, ext) ->
                     val on = mode == ext
                     Text(label, color = if (on) LatentColors.AmberInk else LatentColors.Text, fontSize = 13.sp,
                         modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(999.dp)).background(if (on) LatentColors.Amber else LatentColors.Surface)
@@ -213,7 +219,7 @@ fun ExtensionScreen(onBack: () -> Unit) {
                     }
                 }
             })
-            Text("XIAOMI " + (if (mode == CameraExtensionCharacteristics.EXTENSION_BOKEH) "PORTRAIT" else "NIGHT") + " · JPEG ONLY", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
+            Text("XIAOMI " + extName(mode) + " · JPEG ONLY", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
             if (zoomOk) Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp)) {
                 listOf(0.6f, 1f, 2f, 3f, 4.3f).forEach { z ->
                     val on = zoom == z
