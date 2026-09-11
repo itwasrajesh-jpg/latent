@@ -84,6 +84,63 @@ class ExtensionCamera(private val context: android.content.Context, private val 
     @Volatile var zoom = 1f
     var onZoomSupport: (Boolean) -> Unit = {}
 
+    /** What this extension lets us set. Filled on open, reported via onCaps. */
+    data class Caps(val keys: List<String>, val zoom: Boolean, val ev: Boolean, val manual: Boolean, val afRegions: Boolean, val isz: Boolean, val evRange: android.util.Range<Int>?, val expRange: android.util.Range<Long>?, val isoRange: android.util.Range<Int>?)
+    var caps: Caps? = null
+    var onCaps: (Caps) -> Unit = {}
+    @Volatile var evIndex = 0
+    @Volatile var shutterNs: Long? = null
+    @Volatile var iso: Int? = null
+    @Volatile var isz = false
+    private var afRegion: android.hardware.camera2.params.MeteringRectangle? = null
+
+    private fun discover(): Caps {
+        val names = if (Build.VERSION.SDK_INT >= 33) runCatching { cm.getCameraExtensionCharacteristics(cameraId).getAvailableCaptureRequestKeys(extension).map { it.name } }.getOrDefault(emptyList()) else emptyList()
+        val ch = cm.getCameraCharacteristics(cameraId)
+        val c = Caps(
+            keys = names,
+            zoom = names.contains(CaptureRequest.CONTROL_ZOOM_RATIO.name),
+            ev = names.contains(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION.name),
+            manual = names.contains(CaptureRequest.SENSOR_EXPOSURE_TIME.name) && names.contains(CaptureRequest.SENSOR_SENSITIVITY.name) && names.contains(CaptureRequest.CONTROL_AE_MODE.name),
+            afRegions = names.contains(CaptureRequest.CONTROL_AF_REGIONS.name),
+            isz = names.contains("org.codeaurora.qcamera3.sessionParameters.EnableInsensorZoom"),
+            evRange = ch.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE),
+            expRange = ch.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
+            isoRange = ch.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
+        )
+        android.util.Log.i("Latent", "extension ${extName(extension)} accepts ${names.size} keys: ${names.joinToString()}")
+        caps = c; onCaps(c)
+        return c
+    }
+
+    /** Applies whatever this extension allows to a request. */
+    private fun applyAllowed(b: CaptureRequest.Builder) {
+        val c = caps ?: return
+        if (c.zoom && zoom != 1f) b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
+        if (c.ev && !(c.manual && shutterNs != null)) b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, evIndex)
+        if (c.manual && (shutterNs != null || iso != null)) {
+            b.set(CaptureRequest.CONTROL_AE_MODE, android.hardware.camera2.CameraMetadata.CONTROL_AE_MODE_OFF)
+            shutterNs?.let { b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
+            iso?.let { b.set(CaptureRequest.SENSOR_SENSITIVITY, it) }
+        }
+        if (c.afRegions) afRegion?.let { r -> b.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(r)); b.set(CaptureRequest.CONTROL_AF_MODE, android.hardware.camera2.CameraMetadata.CONTROL_AF_MODE_AUTO); b.set(CaptureRequest.CONTROL_AF_TRIGGER, android.hardware.camera2.CameraMetadata.CONTROL_AF_TRIGGER_START) }
+        if (c.isz && isz) try { b.set(CaptureRequest.Key("org.codeaurora.qcamera3.sessionParameters.EnableInsensorZoom", Int::class.javaObjectType), 1) } catch (_: Throwable) {}
+    }
+
+    fun refresh() = handler.post {
+        val s = session ?: return@post; val dev = device ?: return@post; val surf = previewSurface ?: return@post
+        try { s.setRepeatingRequest(dev.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(surf); applyAllowed(this) }.build(), executor, object : CameraExtensionSession.ExtensionCaptureCallback() {}) } catch (e: Exception) { onStatus("update: ${e.message}") }
+        afRegion = null
+    }
+
+    fun tapFocus(u: Float, v: Float) {
+        val active = cm.getCameraCharacteristics(cameraId).get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+        val sx = v.coerceIn(0f, 1f); val sy = (1f - u).coerceIn(0f, 1f); val half = 0.06f
+        val l = ((sx - half) * active.width()).toInt().coerceIn(0, active.width() - 2); val t = ((sy - half) * active.height()).toInt().coerceIn(0, active.height() - 2)
+        afRegion = android.hardware.camera2.params.MeteringRectangle(l, t, (2 * half * active.width()).toInt(), (2 * half * active.height()).toInt(), 999)
+        refresh()
+    }
+
     private fun zoomSupported(): Boolean = Build.VERSION.SDK_INT >= 33 && runCatching {
         cm.getCameraExtensionCharacteristics(cameraId).getAvailableCaptureRequestKeys(extension).any { it.name == CaptureRequest.CONTROL_ZOOM_RATIO.name }
     }.getOrDefault(false)
@@ -112,6 +169,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
         Thread.sleep(250) // let the previous extension session fully release before the next one
         previewSurface = surface
         onZoomSupport(zoomSupported())
+        discover()
         try {
             val ec = cm.getCameraExtensionCharacteristics(cameraId)
             if (extension !in ec.supportedExtensions) { onStatus("Extension not supported: $extension"); return@post }
@@ -144,7 +202,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
                             override fun onConfigured(s: CameraExtensionSession) {
                                 session = s
                                 try {
-                                    val req = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(surface); if (zoom != 1f && zoomSupported()) set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom) }
+                                    val req = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(surface); applyAllowed(this) }
                                     s.setRepeatingRequest(req.build(), executor, object : CameraExtensionSession.ExtensionCaptureCallback() {})
                                     onStatus("Ready · ${extName(extension)} · tap the shutter")
                                 } catch (e: Exception) { onStatus("preview: ${e.message}") }
@@ -162,7 +220,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
     fun capture() = handler.post {
         val s = session ?: return@post; val dev = device ?: return@post; val r = reader ?: return@post
         try {
-            val req = dev.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply { addTarget(r.surface); set(CaptureRequest.JPEG_ORIENTATION, 90); set(CaptureRequest.JPEG_QUALITY, 100.toByte()); if (zoom != 1f && zoomSupported()) set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom) }
+            val req = dev.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply { addTarget(r.surface); set(CaptureRequest.JPEG_ORIENTATION, 90); set(CaptureRequest.JPEG_QUALITY, 100.toByte()); applyAllowed(this) }
             s.capture(req.build(), executor, object : CameraExtensionSession.ExtensionCaptureCallback() {
                 override fun onCaptureFailed(sess: CameraExtensionSession, request: CaptureRequest) { onStatus("capture failed") }
                 override fun onCaptureProcessStarted(sess: CameraExtensionSession, request: CaptureRequest) { onStatus("Processing…") }
@@ -171,11 +229,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
     }
 
     fun switchTo(ext: Int) { extension = ext; openOnTexture() }
-    fun setZoom(z: Float) = handler.post {
-        zoom = z
-        val s = session ?: return@post; val dev = device ?: return@post; val surf = previewSurface ?: return@post
-        try { s.setRepeatingRequest(dev.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(surf); if (zoomSupported()) set(CaptureRequest.CONTROL_ZOOM_RATIO, z) }.build(), executor, object : CameraExtensionSession.ExtensionCaptureCallback() {}) } catch (e: Exception) { onStatus("zoom: ${e.message}") }
-    }
+    fun setZoom(z: Float) { zoom = z; refresh() }
     fun close() = handler.post { closeInternal() }
     private fun closeInternal() {
         try { session?.close() } catch (_: Exception) {}; session = null
@@ -193,7 +247,12 @@ fun ExtensionScreen(onBack: () -> Unit) {
     var mode by remember { mutableStateOf(CameraExtensionCharacteristics.EXTENSION_BOKEH) }
     var zoomOk by remember { mutableStateOf(false) }
     var zoom by remember { mutableStateOf(1f) }
-    val cam = remember { ExtensionCamera(context) { s -> status = s }.also { it.onZoomSupport = { ok -> zoomOk = ok } } }
+    var caps by remember { mutableStateOf<ExtensionCamera.Caps?>(null) }
+    var ev by remember { mutableStateOf(0) }
+    var shutter by remember { mutableStateOf<Long?>(null) }
+    var isoV by remember { mutableStateOf<Int?>(null) }
+    var iszOn by remember { mutableStateOf(false) }
+    val cam = remember { ExtensionCamera(context) { s -> status = s }.also { it.onZoomSupport = { ok -> zoomOk = ok }; it.onCaps = { c -> caps = c } } }
     DisposableEffect(Unit) { onDispose { cam.destroy() } }
 
     Column(Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().navigationBarsPadding()) {
@@ -208,7 +267,9 @@ fun ExtensionScreen(onBack: () -> Unit) {
                 }
             }
         }
-        Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).background(LatentColors.Surface)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).background(LatentColors.Surface).then(androidx.compose.ui.Modifier.pointerInput(Unit) {
+            androidx.compose.foundation.gestures.detectTapGestures { pos -> if (caps?.afRegions == true) { Haptics.tick(context); cam.tapFocus(pos.x / size.width, pos.y / size.height) } }
+        })) {
             AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
                 TextureView(ctx).apply {
                     surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -226,9 +287,38 @@ fun ExtensionScreen(onBack: () -> Unit) {
                     Text(if (on) "${z}×".replace(".0×", "×") else "$z".removeSuffix(".0"), color = if (on) LatentColors.TextBright else LatentColors.Text, fontSize = if (on) 15.sp else 12.sp,
                         modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); zoom = z; cam.setZoom(z) }).padding(horizontal = 10.dp, vertical = 6.dp))
                 }
+                if (caps?.isz == true) Text(if (iszOn) "ISZ" else "isz", color = if (iszOn) LatentColors.AmberInk else LatentColors.Amber, fontSize = 11.sp,
+                    modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(999.dp)).background(if (iszOn) LatentColors.Amber else androidx.compose.ui.graphics.Color.Transparent).border(0.5.dp, LatentColors.Amber, RoundedCornerShape(999.dp))
+                        .combinedClickable(onClick = { iszOn = !iszOn; cam.isz = iszOn; cam.refresh() }).padding(horizontal = 8.dp, vertical = 3.dp))
             } else Text("LENS: CHOSEN BY XIAOMI", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(12.dp))
+            caps?.let { c -> Text("ACCEPTS: " + listOfNotNull(if (c.zoom) "ZOOM" else null, if (c.ev) "EV" else null, if (c.manual) "MANUAL" else null, if (c.afRegions) "TAP-AF" else null, if (c.isz) "ISZ" else null).ifEmpty { listOf("NOTHING EXTRA") }.joinToString(" · "),
+                color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) }
         }
-        Spacer(Modifier.height(12.dp))
+        caps?.let { c ->
+            if (c.ev && c.evRange != null) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("EV %+.1f".format(ev / 6.0), color = LatentColors.TextBright, fontSize = 12.sp, modifier = Modifier.padding(end = 10.dp))
+                androidx.compose.material3.Slider(value = ev.toFloat(), onValueChange = { v -> val n = Math.round(v); if (n != ev) { Haptics.tick(context); ev = n; cam.evIndex = n; cam.refresh() } },
+                    valueRange = c.evRange.lower.toFloat()..c.evRange.upper.toFloat(), steps = (c.evRange.upper - c.evRange.lower - 1).coerceAtLeast(0),
+                    colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = LatentColors.Amber, activeTrackColor = LatentColors.Amber, inactiveTrackColor = LatentColors.Line))
+            }
+            if (c.manual && c.expRange != null && c.isoRange != null) {
+                val sPresets = com.celestial.latent.camera.ControlMath.shutterPresets(c.expRange.lower, c.expRange.upper)
+                val iPresets = com.celestial.latent.camera.ControlMath.isoPresets(c.isoRange.lower, c.isoRange.upper)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("S " + (shutter?.let { com.celestial.latent.camera.ControlMath.shutterLabel(it) } ?: "A"), color = LatentColors.TextBright, fontSize = 12.sp, modifier = Modifier.padding(end = 10.dp).combinedClickable(onClick = { shutter = null; cam.shutterNs = null; cam.refresh() }))
+                    androidx.compose.material3.Slider(value = (shutter?.let { sh -> sPresets.indexOfFirst { it >= sh }.coerceAtLeast(0) } ?: 0).toFloat(), onValueChange = { v -> val ns = sPresets[Math.round(v).coerceIn(0, sPresets.size - 1)]; if (ns != shutter) { Haptics.tick(context); shutter = ns; cam.shutterNs = ns; cam.refresh() } },
+                        valueRange = 0f..(sPresets.size - 1).toFloat(), steps = (sPresets.size - 2).coerceAtLeast(0),
+                        colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = LatentColors.Amber, activeTrackColor = LatentColors.Amber, inactiveTrackColor = LatentColors.Line))
+                }
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("ISO " + (isoV?.toString() ?: "A"), color = LatentColors.TextBright, fontSize = 12.sp, modifier = Modifier.padding(end = 10.dp).combinedClickable(onClick = { isoV = null; cam.iso = null; cam.refresh() }))
+                    androidx.compose.material3.Slider(value = (isoV?.let { i -> iPresets.indexOfFirst { it >= i }.coerceAtLeast(0) } ?: 0).toFloat(), onValueChange = { v -> val i = iPresets[Math.round(v).coerceIn(0, iPresets.size - 1)]; if (i != isoV) { Haptics.tick(context); isoV = i; cam.iso = i; cam.refresh() } },
+                        valueRange = 0f..(iPresets.size - 1).toFloat(), steps = (iPresets.size - 2).coerceAtLeast(0),
+                        colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = LatentColors.Amber, activeTrackColor = LatentColors.Amber, inactiveTrackColor = LatentColors.Line))
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
         Text(status, color = LatentColors.Text, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
         Spacer(Modifier.height(16.dp))
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
