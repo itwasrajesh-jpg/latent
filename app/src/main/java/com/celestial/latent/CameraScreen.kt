@@ -18,6 +18,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -425,7 +427,7 @@ internal fun FocusEvOverlay(
     val trackPx = with(density) { 120.dp.toPx() }
     Box(
         Modifier.fillMaxSize().pointerInput(p) {
-            androidx.compose.foundation.gestures.detectVerticalDragGestures(
+            detectVerticalDragGestures(
                 onDragStart = { touchedAt = System.currentTimeMillis() },
                 onVerticalDrag = { change, dragAmount ->
                     change.consume()
@@ -433,7 +435,7 @@ internal fun FocusEvOverlay(
                     // 120dp of drag spans the whole EV range; up = brighter.
                     val perStep = trackPx / (evRange.last - evRange.first).coerceAtLeast(1)
                     val delta = -dragAmount / perStep
-                    val next = (evIndex + delta).let { Math.round(it) }.coerceIn(evRange.first, evRange.last)
+                    val next = Math.round(evIndex + delta).coerceIn(evRange.first, evRange.last)
                     if (next != evIndex) { if (next != lastTick) { Haptics.tick(context); lastTick = next }; onEv(next) }
                 },
             )
@@ -442,7 +444,7 @@ internal fun FocusEvOverlay(
         // Box
         Box(Modifier.offset { IntOffset((p.x - boxPx / 2).toInt(), (p.y - boxPx / 2).toInt()) }.size(72.dp).border(1.dp, LatentColors.Amber, RoundedCornerShape(4.dp)))
         // Slider track to the right of the box (or left if near the edge)
-        val screenW = with(density) { androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp.toPx() }
+        val screenW = with(density) { LocalConfiguration.current.screenWidthDp.dp.toPx() }
         val onRight = p.x + boxPx / 2 + with(density) { 40.dp.toPx() } < screenW
         val tx = if (onRight) p.x + boxPx / 2 + with(density) { 14.dp.toPx() } else p.x - boxPx / 2 - with(density) { 14.dp.toPx() }
         val frac = (evIndex - evRange.first).toFloat() / (evRange.last - evRange.first).coerceAtLeast(1)
