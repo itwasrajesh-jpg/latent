@@ -113,37 +113,44 @@ class CameraController(
 
     /** Open the chosen lens. Preview surface must already exist. */
     @SuppressLint("MissingPermission")
-    fun open(lens: Lens, surface: Surface) {
+    fun open(lens: Lens, surface: Surface, attempt: Int = 0) {
         handler.post {
             closeInternal()
             this.lens = lens
             this.previewSurface = surface
             directOpen = cameraPath == "direct" || fallbackDirect
             logicalId = if (cameraPath == "direct") Lenses.LOGICAL_ID else cameraPath
-            physChars = cm.getCameraCharacteristics(lens.physicalId)
-            afRegion = null; afTriggerPending = false; lastTransform = null; lastGains = null
-            val map = physChars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
-            rawSize = map.getOutputSizes(ImageFormat.RAW_SENSOR).maxByOrNull { it.width.toLong() * it.height } ?: rawSize
-            rawReader = ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 6).also {
-                it.setOnImageAvailableListener({ r -> onRawImage(r) }, handler)
-            }
-            jpegReader = if (saveJpeg) {
-                val jpegSize = map.getOutputSizes(ImageFormat.JPEG).maxByOrNull { it.width.toLong() * it.height } ?: rawSize
-                ImageReader.newInstance(jpegSize.width, jpegSize.height, ImageFormat.JPEG, 2).also {
-                    it.setOnImageAvailableListener({ r -> onJpegImage(r) }, handler)
-                }
-            } else null
-            oisAvailable = physChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true
-            status("Opening ${lens.name} (${lens.label}) · RAW ${rawSize.width}x${rawSize.height}")
-            val idToOpen = if (directOpen) lens.physicalId else logicalId
             try {
+                physChars = cm.getCameraCharacteristics(lens.physicalId)
+                afRegion = null; afTriggerPending = false; lastTransform = null; lastGains = null
+                val map = physChars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
+                rawSize = map.getOutputSizes(ImageFormat.RAW_SENSOR).maxByOrNull { it.width.toLong() * it.height } ?: rawSize
+                rawReader = ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 6).also {
+                    it.setOnImageAvailableListener({ r -> onRawImage(r) }, handler)
+                }
+                jpegReader = if (saveJpeg) {
+                    val jpegSize = map.getOutputSizes(ImageFormat.JPEG).maxByOrNull { it.width.toLong() * it.height } ?: rawSize
+                    ImageReader.newInstance(jpegSize.width, jpegSize.height, ImageFormat.JPEG, 2).also {
+                        it.setOnImageAvailableListener({ r -> onJpegImage(r) }, handler)
+                    }
+                } else null
+                oisAvailable = physChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true
+                status("Opening ${lens.name} (${lens.label}) · RAW ${rawSize.width}x${rawSize.height}")
+                val idToOpen = if (directOpen) lens.physicalId else logicalId
                 cm.openCamera(idToOpen, object : CameraDevice.StateCallback() {
                     override fun onOpened(cam: CameraDevice) { device = cam; createSession() }
                     override fun onDisconnected(cam: CameraDevice) { log("camera disconnected"); cam.close(); device = null }
                     override fun onError(cam: CameraDevice, error: Int) { status("Camera error $error"); cam.close(); device = null }
                 }, handler)
             } catch (e: Exception) {
-                status("openCamera failed: ${e.message}")
+                // Typically the camera service restarting after a driver crash: IDs vanish for a moment.
+                if (attempt < 10) {
+                    status("Camera service restarting… (${attempt + 1}/10)")
+                    log("open failed: ${e.javaClass.simpleName} ${e.message}")
+                    handler.postDelayed({ open(lens, surface, attempt + 1) }, 1500)
+                } else {
+                    status("Camera unavailable: ${e.message}. Remove any vendor tag the lens rejects and switch lenses again.")
+                }
             }
         }
     }
