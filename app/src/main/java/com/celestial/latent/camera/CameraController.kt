@@ -75,9 +75,19 @@ class CameraController(
     @Volatile var vendorTags: List<VendorTagSpec> = emptyList()
     /** Built-in feature: Qualcomm in-sensor zoom for the JPEG path. */
     @Volatile var inSensorZoomJpeg = false
+    @Volatile var dcgMode = false
+    @Volatile var sensorShdr = false
     private val ISZ_KEY = "org.codeaurora.qcamera3.sessionParameters.EnableInsensorZoom"
-    private fun allTags(): List<VendorTagSpec> =
-        if (inSensorZoomJpeg && vendorTags.none { it.name == ISZ_KEY }) vendorTags + VendorTagSpec(ISZ_KEY, "session", "i32", "1") else vendorTags
+    private val DCG_KEY = "org.codeaurora.qcamera3.sessionParameters.EnableHDRDCGMode"
+    private val SHDR_KEY = "org.codeaurora.qcamera3.sessionParameters.inSensorSHDRMode"
+    private fun allTags(): List<VendorTagSpec> {
+        val out = ArrayList(vendorTags)
+        fun add(k: String) { if (out.none { it.name == k }) out += VendorTagSpec(k, "session", "i32", "1") }
+        if (inSensorZoomJpeg) add(ISZ_KEY)
+        if (dcgMode) add(DCG_KEY)
+        if (sensorShdr) add(SHDR_KEY)
+        return out
+    }
     @Volatile var onVendorEcho: (String) -> Unit = {}
     private lateinit var physChars: CameraCharacteristics
     private var rawSize = Size(4096, 3072)
@@ -402,7 +412,7 @@ class CameraController(
         try {
             val job = BurstJob(frames, rawSize.width, rawSize.height, System.nanoTime())
             burst = job
-            val reqs = List(frames) { stillRequest().build() }
+            val reqs = List(frames) { i -> stillRequest(withJpeg = saveJpeg && i == 0).build() }
             s.captureBurst(reqs, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(sess: CameraCaptureSession, req: CaptureRequest, result: TotalCaptureResult) { onResult(result, null) }
                 override fun onCaptureFailed(sess: CameraCaptureSession, req: CaptureRequest, failure: android.hardware.camera2.CaptureFailure) {
@@ -470,13 +480,14 @@ class CameraController(
                 val avgName = fileName("STACK${job.received}")
                 val meta = DngWriter.metaFrom(physChars, job.firstResult?.let { metaFor(it) }, job.w, job.h,
                     black = 64 * 16, white = 1023 * 16, orientation = 6,
-                    description = "Latent burst average of ${job.received} frames, sensor span $sensorMs ms")
-                val pixels = job.averageTimes16()
+                    description = "Latent aligned burst of ${job.received} frames, sensor span $sensorMs ms, ${job.tilesAccepted}/${job.tilesTotal} tiles")
+                val pixels = job.result()
                 val t = System.nanoTime()
                 saveTo(avgName) { DngWriter.write(it, meta, pixels) }
                 val wms = (System.nanoTime() - t) / 1_000_000
                 status("Burst: ${job.received}/${job.frames} frames (${job.failed} failed) · sensor span $sensorMs ms · total $wallMs ms · saved ${job.firstName} + $avgName (write $wms ms)")
                 onLog("burst frame timestamps ms from first: " + job.tsList.joinToString { ((it - job.firstTs) / 1_000_000).toString() })
+                onLog("alignment shifts px (accepted tiles): " + job.shifts.joinToString(" ") + " · overall ${job.tilesAccepted}/${job.tilesTotal} tiles used")
             } catch (e: Exception) { status("burst save failed: ${e.message}"); Log.e("Latent", "burst", e) }
         }
     }
@@ -625,48 +636,59 @@ class CameraController(
     private fun status(s: String) { Log.i("Latent", s); onStatus(s) }
     private fun log(s: String) { Log.i("Latent", s); onLog(s) }
 
-    /** Accumulates a burst: sums 16-bit CFA samples into ints, keeps frame 1 as a normal DNG. */
+    /** Accumulates a burst with alignment: frame 1 is the reference, later frames are shifted and tile-checked. */
     private inner class BurstJob(val frames: Int, val w: Int, val h: Int, val startNs: Long) {
         var received = 0; var failed = 0
         var firstTs = 0L; var lastTs = 0L
         var firstResult: TotalCaptureResult? = null
         var firstName = ""
         val tsList = ArrayList<Long>()
+        val shifts = ArrayList<String>()
         private val sum = IntArray(w * h)
+        private val count = ShortArray((w / 64) * (h / 64))
+        private var ref: ShortArray? = null
+        private var refPyr: Align.Pyramid? = null
+        private val cur = ShortArray(w * h)
+        var tilesAccepted = 0; var tilesTotal = 0
+
+        private fun readInto(img: Image, dst: ShortArray) {
+            val plane = img.planes[0]
+            val sb = plane.buffer.order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
+            val rowStride = plane.rowStride
+            for (y in 0 until h) { sb.position(y * rowStride / 2); sb.get(dst, y * w, w) }
+        }
 
         fun accept(img: Image, result: TotalCaptureResult) {
             val ts = img.timestamp
             tsList += ts
             if (received == 0) {
                 firstTs = ts; firstResult = result
-                firstName = fileName("BURST1")
+                val base = fileBase("BURST1")
+                firstName = "$base.dng"
+                baseNames[ts] = base
+                pendingJpegs.remove(ts)?.let { saveJpegBytes(base, it) }
                 writeDngCreator(img, result, firstName)
+                val r = ShortArray(w * h); readInto(img, r); ref = r
+                refPyr = Align.pyramid(r, w, h)
+                // Reference counts as the first accepted sample everywhere.
+                for (i in sum.indices) sum[i] = r[i].toInt() and 0xFFFF
+                for (i in count.indices) count[i] = 1
+                tilesAccepted += count.size; tilesTotal += count.size
+                shifts += "0,0"
+            } else {
+                readInto(img, cur)
+                val pyr = Align.pyramid(cur, w, h)
+                val (dx0, dy0) = Align.findShift(refPyr!!, pyr)
+                val sx = dx0 * 2; val sy = dy0 * 2   // level-0 units are 2x2 cells
+                val (acc, tot) = Align.accumulate(ref!!, cur, w, h, sx, sy, sum, count)
+                tilesAccepted += acc; tilesTotal += tot
+                shifts += "$sx,$sy(${acc}/${tot})"
             }
             lastTs = ts
-            val plane = img.planes[0]
-            val buf = plane.buffer
-            val rowStride = plane.rowStride
-            val sb = buf.order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
-            val row = ShortArray(w)
-            for (y in 0 until h) {
-                sb.position(y * rowStride / 2)
-                sb.get(row, 0, w)
-                val base = y * w
-                for (x in 0 until w) sum[base + x] += row[x].toInt() and 0xFFFF
-            }
             received++
             status("Burst: frame $received/$frames")
         }
 
-        /** Average scaled by 16 (so 10-bit input becomes a 14-bit-range file), clamped to 16 bits. */
-        fun averageTimes16(): ShortArray {
-            val n = received.coerceAtLeast(1)
-            val out = ShortArray(w * h)
-            for (i in out.indices) {
-                val v = (sum[i].toLong() * 16 + n / 2) / n
-                out[i] = v.coerceAtMost(65535).toInt().toShort()
-            }
-            return out
-        }
+        fun result(): ShortArray = Align.finish(ref!!, sum, count, w, h)
     }
 }

@@ -24,6 +24,8 @@ data class AppSettings(
     val opmode: Int = 0,                // vendor session operating mode; 0 = regular
     val vendorTags: List<VendorTag> = emptyList(),
     val inSensorZoomJpeg: Boolean = false,  // Qualcomm EnableInsensorZoom: native-crop JPEG at 2x (RAW stays 1x for now)
+    val dcgMode: Boolean = false,           // EnableHDRDCGMode=1 (experimental; measure with the quality probe)
+    val sensorShdr: Boolean = false,        // inSensorSHDRMode=1 (experimental)
 ) {
     companion object {
         const val ANTIBANDING_OFF = 0
@@ -47,6 +49,8 @@ data class AppSettings(
                 opmode = p.getInt("opmode", 0),
                 vendorTags = (p.getString("vendorTags", "") ?: "").split("\n").mapNotNull { VendorTag.decode(it) },
                 inSensorZoomJpeg = p.getBoolean("inSensorZoomJpeg", false),
+                dcgMode = p.getBoolean("dcgMode", false),
+                sensorShdr = p.getBoolean("sensorShdr", false),
             )
         }
 
@@ -63,6 +67,8 @@ data class AppSettings(
                 .putInt("opmode", s.opmode)
                 .putString("vendorTags", s.vendorTags.joinToString("\n") { it.encode() })
                 .putBoolean("inSensorZoomJpeg", s.inSensorZoomJpeg)
+                .putBoolean("dcgMode", s.dcgMode)
+                .putBoolean("sensorShdr", s.sensorShdr)
                 .apply()
         }
     }

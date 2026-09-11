@@ -115,8 +115,45 @@ class VendorProbe(private val context: Context) {
     data class Outcome(
         val ok: Boolean, val note: String, val rawW: Int = 0, val rawH: Int = 0, val crop: String = "", val focal: String = "", val echo: String = "",
         val whiteLevel: String = "", val blackLevel: String = "", val exposure: String = "", val frameNs: String = "", val thumb: FloatArray? = null,
+        val shadowNoise: Float = 0f, val clipped: Float = 0f, val meanLevel: Float = 0f, val exposureNs: Long = 0, val iso: Int = 0,
     ) {
-        override fun toString() = if (ok) "ok raw=${rawW}x$rawH crop=$crop focal=$focal echo=$echo white=$whiteLevel black=$blackLevel exp=$exposure frame=$frameNs" else "FAILED: $note"
+        override fun toString() = if (ok) "ok raw=${rawW}x$rawH echo=$echo white=$whiteLevel black=$blackLevel exp=$exposure iso=$iso · shadowNoise=%.2f clipped=%.3f%% mean=%.0f".format(shadowNoise, clipped * 100, meanLevel) else "FAILED: $note"
+    }
+
+    /** Shadow noise (mean std of the darkest flat blocks, one CFA channel), clipped fraction, mean level. */
+    private fun metrics(img: android.media.Image, white: Int): Triple<Float, Float, Float> {
+        val w = img.width; val h = img.height
+        val plane = img.planes[0]; val stride = plane.rowStride
+        val sb = plane.buffer.order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
+        val bs = 32
+        val means = ArrayList<Float>(); val stds = ArrayList<Float>()
+        var clipped = 0L; var total = 0L; var sumAll = 0.0
+        val row = ShortArray(w)
+        val bx = w / bs; val by = h / bs
+        val acc = DoubleArray(bx); val acc2 = DoubleArray(bx); val n = IntArray(bx)
+        for (y in 0 until by * bs step 2) {
+            sb.position(y * stride / 2); sb.get(row, 0, w)
+            for (x in 0 until bx * bs step 2) {
+                val v = (row[x].toInt() and 0xFFFF); val b = x / bs
+                acc[b] += v.toDouble(); acc2[b] += v.toDouble() * v; n[b]++
+                if (v >= white - 2) clipped++
+                total++; sumAll += v
+            }
+            if ((y + 2) % bs == 0) {
+                for (b in 0 until bx) if (n[b] > 8) {
+                    val m = acc[b] / n[b]; val v = acc2[b] / n[b] - m * m
+                    means += m.toFloat(); stds += Math.sqrt(Math.max(v, 0.0)).toFloat()
+                    acc[b] = 0.0; acc2[b] = 0.0; n[b] = 0
+                }
+            }
+        }
+        if (means.isEmpty()) return Triple(0f, 0f, 0f)
+        // darkest 15% of blocks by mean, then the flattest half of those (lowest std) to avoid texture
+        val idx = means.indices.sortedBy { means[it] }
+        val dark = idx.take(Math.max(4, idx.size * 15 / 100)).sortedBy { stds[it] }
+        val flat = dark.take(Math.max(2, dark.size / 2))
+        val shadow = flat.map { stds[it] }.average().toFloat()
+        return Triple(shadow, clipped.toFloat() / total, (sumAll / total).toFloat())
     }
 
     /** 64x48 grey thumbnail of a RAW frame (mean of each 2x2 CFA cell, then box-downsampled). */
@@ -166,6 +203,67 @@ class VendorProbe(private val context: Context) {
         return r
     }
 
+    /**
+     * Quality probe: locked exposure, same scene, measure shadow noise / clipping / white level with each key;
+     * retry timed-out keys with other stream layouts; test RAW routing keys with in-sensor zoom at 2x.
+     */
+    fun qualityProbe(path: String, lens: Lens, progress: (String) -> Unit): String {
+        val P = "org.codeaurora.qcamera3.sessionParameters."
+        val quality = listOf(P + "EnableHDRDCGMode", P + "inSensorSHDRMode", P + "numHDRexposure", P + "EnableMFHDR", P + "EnableQHDR", P + "EnableXHDR", P + "SnapshotHDRMode", P + "HDRModePreference")
+        val timedOut = listOf(P + "EnableIdealRAW", P + "EnableSHDR", P + "HDRMode", P + "EnableAutoHDR")
+        val routing = listOf(P + "RawCbSourceType" to listOf(0, 1, 2), P + "McxRawCallbackInfo" to listOf(1))
+        val sb = StringBuilder("LATENT QUALITY PROBE · path=$path lens=${lens.physicalId} (${lens.name})\n")
+        progress("metering…")
+        val auto = runOneRetry(path, lens, null, 1f)
+        if (!auto.ok || auto.exposureNs == 0L) return sb.appendLine("could not meter: $auto").toString()
+        val lock = auto.exposureNs to auto.iso
+        sb.appendLine("locked exposure: ${auto.exposure} ISO ${auto.iso}")
+        progress("baseline…")
+        val base = runOne(path, lens, null, 1f, 1, lock)
+        sb.appendLine("baseline: $base")
+        fun verdict(r: Outcome): String {
+            if (!r.ok || !base.ok) return ""
+            val parts = ArrayList<String>()
+            if (r.whiteLevel != base.whiteLevel || r.blackLevel != base.blackLevel) parts += "LEVELS CHANGED"
+            val nr = if (base.shadowNoise > 0f) r.shadowNoise / base.shadowNoise else 1f
+            if (nr < 0.8f) parts += "shadows %.0f%% cleaner".format((1 - nr) * 100) else if (nr > 1.25f) parts += "shadows %.0f%% noisier".format((nr - 1) * 100)
+            if (base.clipped > 0.001f && r.clipped < base.clipped * 0.5f) parts += "clipping halved"
+            if (Math.abs(r.meanLevel - base.meanLevel) > base.meanLevel * 0.15f) parts += "mean level shifted"
+            return if (parts.isEmpty()) "no measurable change" else "← " + parts.joinToString(", ")
+        }
+        sb.appendLine("\n-- quality keys (value 1, session+request, locked exposure)")
+        for (k in quality) {
+            progress(k.substringAfterLast('.'))
+            val r = runOneRetry2(path, lens, k, 1f, 1, lock)
+            sb.appendLine("${k.substringAfterLast('.')}: $r ${verdict(r)}")
+        }
+        sb.appendLine("\n-- keys that timed out before, with other stream layouts")
+        for (k in timedOut) for (v in listOf("raw", "raw10", "raw+yuv")) {
+            progress("${k.substringAfterLast('.')} [$v]")
+            val r = runOneRetry2(path, lens, k, 1f, 1, lock, v)
+            sb.appendLine("${k.substringAfterLast('.')} [$v]: $r ${if (r.ok) verdict(r) else ""}")
+        }
+        sb.appendLine("\n-- RAW routing with in-sensor zoom flag at 2x (view test)")
+        val isz = P + "EnableInsensorZoom"
+        val base2 = runOne(path, lens, null, 2f, 1, lock)
+        val iszOnly = runOne(path, lens, isz, 2f, 1, lock)
+        sb.appendLine("ISZ only @2x: ${classify(iszOnly.thumb, base.thumb)}")
+        for ((k, vals) in routing) for (v in vals) {
+            progress("${k.substringAfterLast('.')}=$v @2x")
+            val r = runOne(path, lens, isz, 2f, 1, lock, "raw", listOf(k to v))
+            sb.appendLine("ISZ + ${k.substringAfterLast('.')}=$v @2x: ${if (r.ok) classify(r.thumb, base.thumb) else r.toString()}")
+        }
+        return sb.toString()
+    }
+
+    private fun runOneRetry2(path: String, lens: Lens, key: String?, zoom: Float, value: Int, lock: Pair<Long, Int>?, variant: String = "raw"): Outcome {
+        var r = runOne(path, lens, key, zoom, value, lock, variant)
+        if (!r.ok && (r.note.startsWith("no characteristics") || r.note.startsWith("open") || r.note == "disconnected")) {
+            Thread.sleep(4000); r = runOne(path, lens, key, zoom, value, lock, variant)
+        }
+        return r
+    }
+
     /** Sweep sensor mode indices via sensor_meta_data.current_mode (request scope). */
     @SuppressLint("MissingPermission")
     fun sensorModeSweep(path: String, lens: Lens, from: Int, to: Int, progress: (String) -> Unit): String {
@@ -185,14 +283,18 @@ class VendorProbe(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    private fun runOne(path: String, lens: Lens, key: String?, zoom: Float, value: Int = 1): Outcome {
+    private fun runOne(path: String, lens: Lens, key: String?, zoom: Float, value: Int = 1, lock: Pair<Long, Int>? = null, variant: String = "raw", extra: List<Pair<String, Int>> = emptyList()): Outcome {
         val direct = path == "direct"
         val physChars = try { cm.getCameraCharacteristics(lens.physicalId) } catch (t: Throwable) { return Outcome(false, "no characteristics") }
         val map = physChars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Outcome(false, "no stream map")
         val rawSize = map.getOutputSizes(ImageFormat.RAW_SENSOR).maxByOrNull { it.width.toLong() * it.height } ?: return Outcome(false, "no RAW")
         val st = SurfaceTexture(0).apply { setDefaultBufferSize(1280, 960) }
         val previewSurface = Surface(st)
-        val reader = ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 2)
+        val rawFormat = if (variant == "raw10") ImageFormat.RAW10 else ImageFormat.RAW_SENSOR
+        val reader = ImageReader.newInstance(rawSize.width, rawSize.height, rawFormat, 2)
+        val yuvReader = if (variant == "raw+yuv") ImageReader.newInstance(1280, 960, ImageFormat.YUV_420_888, 2).also { it.setOnImageAvailableListener({ r -> r.acquireNextImage()?.close() }, handler) } else null
+        val white = physChars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL) ?: 1023
+        var met = Triple(0f, 0f, 0f)
         var device: CameraDevice? = null
         var session: CameraCaptureSession? = null
         var outcome = Outcome(false, "timeout")
@@ -201,11 +303,19 @@ class VendorProbe(private val context: Context) {
         var thumb: FloatArray? = null
         var result: TotalCaptureResult? = null
         val gotImage = CountDownLatch(1); val gotResult = CountDownLatch(1)
-        reader.setOnImageAvailableListener({ r -> r.acquireNextImage()?.let { img -> rawW = img.width; rawH = img.height; thumb = runCatching { thumbnail(img) }.getOrNull(); img.close() }; gotImage.countDown() }, handler)
+        reader.setOnImageAvailableListener({ r -> r.acquireNextImage()?.let { img -> rawW = img.width; rawH = img.height
+            if (rawFormat == ImageFormat.RAW_SENSOR) { thumb = runCatching { thumbnail(img) }.getOrNull(); met = runCatching { metrics(img, white) }.getOrDefault(met) }
+            img.close() }; gotImage.countDown() }, handler)
 
         fun finish(o: Outcome) { outcome = o; done.countDown() }
         fun setKey(b: CaptureRequest.Builder) {
             if (zoom != 1f) b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
+            if (lock != null) {
+                b.set(CaptureRequest.CONTROL_AE_MODE, android.hardware.camera2.CameraMetadata.CONTROL_AE_MODE_OFF)
+                b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, lock.first); b.set(CaptureRequest.SENSOR_SENSITIVITY, lock.second)
+                b.set(CaptureRequest.SENSOR_FRAME_DURATION, maxOf(33_333_333L, lock.first))
+            }
+            for ((k, v) in extra) try { b.set(CaptureRequest.Key(k, Int::class.javaObjectType), v) } catch (_: Throwable) {}
             if (key != null) try { b.set(CaptureRequest.Key(key, Int::class.javaObjectType), value) } catch (t: Throwable) { try { b.set(CaptureRequest.Key(key, Byte::class.javaObjectType), value.toByte()) } catch (_: Throwable) {} } }
 
         try {
@@ -213,15 +323,17 @@ class VendorProbe(private val context: Context) {
                 override fun onOpened(cam: CameraDevice) {
                     device = cam
                     try {
-                        val oPrev = OutputConfiguration(previewSurface); val oRaw = OutputConfiguration(reader.surface)
-                        if (!direct) { oPrev.setPhysicalCameraId(lens.physicalId); oRaw.setPhysicalCameraId(lens.physicalId) }
-                        val cfg = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, listOf(oPrev, oRaw), executor, object : CameraCaptureSession.StateCallback() {
+                        val outs = ArrayList<OutputConfiguration>()
+                        outs += OutputConfiguration(previewSurface); outs += OutputConfiguration(reader.surface)
+                        yuvReader?.let { outs += OutputConfiguration(it.surface) }
+                        if (!direct) outs.forEach { it.setPhysicalCameraId(lens.physicalId) }
+                        val cfg = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, outs, executor, object : CameraCaptureSession.StateCallback() {
                             override fun onConfigured(s: CameraCaptureSession) {
                                 session = s
                                 try {
                                     val prev = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(previewSurface); setKey(this) }
                                     s.setRepeatingRequest(prev.build(), null, handler)
-                                    val still = cam.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply { addTarget(reader.surface); addTarget(previewSurface); setKey(this) }
+                                    val still = cam.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply { addTarget(reader.surface); addTarget(previewSurface); yuvReader?.let { addTarget(it.surface) }; setKey(this) }
                                     handler.postDelayed({
                                         try {
                                             s.capture(still.build(), object : CameraCaptureSession.CaptureCallback() {
@@ -254,17 +366,19 @@ class VendorProbe(private val context: Context) {
                 val echo = if (key == null) "" else (runCatching { pr.get(CaptureResult.Key(key, IntArray::class.java))?.joinToString() }.getOrNull()
                     ?: runCatching { pr.get(CaptureResult.Key(key, Int::class.javaObjectType))?.toString() }.getOrNull()
                     ?: runCatching { pr.get(CaptureResult.Key(key, ByteArray::class.java))?.joinToString() }.getOrNull() ?: "not reported")
-                val white = pr.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)?.toString() ?: "?"
+                val whiteS = pr.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)?.toString() ?: "?"
                 val black = pr.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)?.joinToString() ?: "?"
                 val exp = pr.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { "%.1fms".format(it / 1e6) } ?: "?"
                 val fd = pr.get(CaptureResult.SENSOR_FRAME_DURATION)?.let { "%.1fms".format(it / 1e6) } ?: "?"
-                finish(Outcome(true, "", rawW, rawH, crop, focal, echo, white, black, exp, fd, thumb))
+                val expNs = pr.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+                val isoV = pr.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
+                finish(Outcome(true, "", rawW, rawH, crop, focal, echo, whiteS, black, exp, fd, thumb, met.first, met.second, met.third, expNs, isoV))
             }
             Thread.sleep(50)
         }
         try { session?.close() } catch (_: Throwable) {}
         try { device?.close() } catch (_: Throwable) {}
-        reader.close(); previewSurface.release(); st.release()
+        reader.close(); yuvReader?.close(); previewSurface.release(); st.release()
         // Give the HAL a moment to fully release before the next open.
         Thread.sleep(400)
         return outcome

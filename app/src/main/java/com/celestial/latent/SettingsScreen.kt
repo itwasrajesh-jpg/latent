@@ -52,6 +52,10 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
         Section("Viewfinder")
         ToggleRow("Gridlines", "Rule-of-thirds lines over the preview", settings.gridlines) { onChange(settings.copy(gridlines = it)) }
 
+        Section("Sensor modes (experimental)")
+        ToggleRow("DCG mode", "Sends EnableHDRDCGMode=1. The driver accepts it; whether it changes the RAW is what the quality probe measures. Takes effect on next lens switch.", settings.dcgMode) { onChange(settings.copy(dcgMode = it)) }
+        ToggleRow("In-sensor staggered HDR", "Sends inSensorSHDRMode=1. Same caveat.", settings.sensorShdr) { onChange(settings.copy(sensorShdr = it)) }
+
         Section("Files")
         OptionRow(
             title = "Format",

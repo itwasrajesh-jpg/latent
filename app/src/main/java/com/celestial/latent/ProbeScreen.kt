@@ -92,6 +92,9 @@ fun ProbeScreen(settings: AppSettings, onBack: () -> Unit) {
             Btn("Sensor mode sweep 0–63 on ${settings.cameraPath}/${lens.physicalId}", !running) {
                 run { probe.sensorModeSweep(settings.cameraPath, lens, 0, 63) { p -> progress = p } }
             }
+            Btn("Quality probe (DCG/HDR/routing)", !running) {
+                run { probe.qualityProbe(settings.cameraPath, lens) { p -> progress = p } }
+            }
         }
         if (progress.isNotEmpty()) { Spacer(Modifier.height(8.dp)); Text(progress, color = LatentColors.Amber, fontSize = 12.sp) }
         Spacer(Modifier.height(12.dp))

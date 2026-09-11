@@ -97,6 +97,8 @@ fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChange
     LaunchedEffect(Unit) { controller.onVendorEcho = onVendorEcho; onController(controller) }
     LaunchedEffect(settings.saveJpeg) { controller.saveJpeg = settings.saveJpeg }
     LaunchedEffect(settings.inSensorZoomJpeg) { controller.inSensorZoomJpeg = settings.inSensorZoomJpeg }
+    LaunchedEffect(settings.dcgMode) { controller.dcgMode = settings.dcgMode }
+    LaunchedEffect(settings.sensorShdr) { controller.sensorShdr = settings.sensorShdr }
     LaunchedEffect(focusTapAt) { if (focusTapAt > 0) { delay(1500); focusTap = null } }
 
     fun push(c: Controls) { controls = c; controller.setControls(c) }
