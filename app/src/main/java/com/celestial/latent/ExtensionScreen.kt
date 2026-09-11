@@ -28,6 +28,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -90,6 +91,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
     data class Caps(val keys: List<String>, val zoom: Boolean, val ev: Boolean, val manual: Boolean, val afRegions: Boolean, val isz: Boolean, val evRange: android.util.Range<Int>?, val expRange: android.util.Range<Long>?, val isoRange: android.util.Range<Int>?)
     var caps: Caps? = null
     var onCaps: (Caps) -> Unit = {}
+    var onSaved: (android.net.Uri) -> Unit = {}
     @Volatile var evIndex = 0
     @Volatile var shutterNs: Long? = null
     @Volatile var iso: Int? = null
@@ -103,7 +105,8 @@ class ExtensionCamera(private val context: android.content.Context, private val 
             keys = names,
             zoom = names.contains(CaptureRequest.CONTROL_ZOOM_RATIO.name),
             ev = names.contains(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION.name),
-            manual = names.contains(CaptureRequest.SENSOR_EXPOSURE_TIME.name) && names.contains(CaptureRequest.SENSOR_SENSITIVITY.name) && names.contains(CaptureRequest.CONTROL_AE_MODE.name),
+            // Xiaomi's extensions list the manual keys but skip white balance when AE is off (green cast) — manual stays off in all of them.
+            manual = false,
             afRegions = names.contains(CaptureRequest.CONTROL_AF_REGIONS.name),
             isz = names.contains("org.codeaurora.qcamera3.sessionParameters.EnableInsensorZoom"),
             evRange = ch.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE),
@@ -191,6 +194,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
                             resolver.openOutputStream(uri)!!.use { it.write(bytes) }
                             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0); resolver.update(uri, values, null, null)
                             onStatus("Saved $name (${bytes.size / 1024} KB, ${img.width}x${img.height})")
+                            onSaved(uri)
                         } catch (e: Exception) { onStatus("save failed: ${e.message}") } finally { img.close() }
                     }
                 }, handler)
@@ -254,23 +258,41 @@ fun ExtensionScreen(onBack: () -> Unit) {
     var shutter by remember { mutableStateOf<Long?>(null) }
     var isoV by remember { mutableStateOf<Int?>(null) }
     var iszOn by remember { mutableStateOf(false) }
-    val cam = remember { ExtensionCamera(context) { s -> status = s }.also { it.onZoomSupport = { ok -> zoomOk = ok }; it.onCaps = { c -> caps = c } } }
+    var selected by remember { mutableStateOf("") }
+    var lastUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var thumb by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var toast by remember { mutableStateOf("") }
+    var focusTap by remember { mutableStateOf<androidx.compose.ui.geometry.Offset?>(null) }
+    val cam = remember {
+        ExtensionCamera(context) { s -> status = s }.also {
+            it.onZoomSupport = { ok -> zoomOk = ok }; it.onCaps = { c -> caps = c }
+            it.onSaved = { uri -> Thread { val b = runCatching { context.contentResolver.loadThumbnail(uri, android.util.Size(192, 192), null) }.getOrNull(); if (b != null) { thumb = b; lastUri = uri } }.start() }
+        }
+    }
     DisposableEffect(Unit) { onDispose { cam.destroy() } }
+    androidx.compose.runtime.LaunchedEffect(status) { val l = status.lowercase(); if (l.contains("fail") || l.contains("refused") || l.contains("error") || l.contains("processing")) { toast = status; kotlinx.coroutines.delay(2500); toast = "" } }
+    fun resetManual() { ev = 0; shutter = null; isoV = null; cam.evIndex = 0; cam.shutterNs = null; cam.iso = null; selected = "" }
 
     Column(Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("‹ settings", color = LatentColors.Text, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onBack))
+        // Top bar: back · mode chips · (spacer)
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("‹", color = LatentColors.Text, fontSize = 22.sp, modifier = Modifier.combinedClickable(onClick = onBack).padding(horizontal = 6.dp))
             Row {
                 listOf("Portrait" to CameraExtensionCharacteristics.EXTENSION_BOKEH, "Night" to CameraExtensionCharacteristics.EXTENSION_NIGHT, "Auto" to CameraExtensionCharacteristics.EXTENSION_AUTOMATIC).forEach { (label, ext) ->
                     val on = mode == ext
-                    Text(label, color = if (on) LatentColors.AmberInk else LatentColors.Text, fontSize = 13.sp,
-                        modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(999.dp)).background(if (on) LatentColors.Amber else LatentColors.Surface)
-                            .combinedClickable(onClick = { if (!on) { mode = ext; Haptics.tick(context); cam.switchTo(ext) } }).padding(horizontal = 12.dp, vertical = 6.dp))
+                    Text(label.uppercase(), color = if (on) LatentColors.TextBright else LatentColors.TextDim, fontSize = 11.sp, letterSpacing = 2.sp,
+                        modifier = Modifier.combinedClickable(onClick = { if (!on) { Haptics.tick(context); mode = ext; resetManual(); cam.switchTo(ext) } }).padding(horizontal = 10.dp, vertical = 4.dp))
                 }
             }
+            Spacer(Modifier.size(22.dp))
         }
+        // Viewfinder with overlays
         Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).background(LatentColors.Surface).pointerInput(Unit) {
-            detectTapGestures { pos -> if (caps?.afRegions == true) { Haptics.tick(context); cam.tapFocus(pos.x / size.width, pos.y / size.height) } }
+            detectTapGestures { pos ->
+                val c = caps ?: return@detectTapGestures
+                if (c.afRegions) cam.tapFocus(pos.x / size.width, pos.y / size.height)
+                if (c.afRegions || c.ev) { Haptics.tick(context); focusTap = pos }
+            }
         }) {
             AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
                 TextureView(ctx).apply {
@@ -282,51 +304,60 @@ fun ExtensionScreen(onBack: () -> Unit) {
                     }
                 }
             })
-            Text("XIAOMI " + extName(mode) + " · JPEG ONLY", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
-            if (zoomOk) Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp)) {
+            Text("XIAOMI " + extName(mode) + " · JPG", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
+            caps?.let { c -> Text(listOfNotNull(if (c.zoom) "ZOOM" else null, if (c.ev) "EV" else null, if (c.manual) "MANUAL" else null, if (c.afRegions) "TAP-AF" else null, if (c.isz) "ISZ" else null).ifEmpty { listOf("AUTO ONLY") }.joinToString(" · "),
+                color = LatentColors.Amber, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) }
+            if (zoomOk) Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp), verticalAlignment = Alignment.CenterVertically) {
                 listOf(0.6f, 1f, 2f, 3f, 4.3f).forEach { z ->
                     val on = zoom == z
                     Text(if (on) "${z}×".replace(".0×", "×") else "$z".removeSuffix(".0"), color = if (on) LatentColors.TextBright else LatentColors.Text, fontSize = if (on) 15.sp else 12.sp,
-                        modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); zoom = z; cam.applyZoom(z) }).padding(horizontal = 10.dp, vertical = 6.dp))
+                        modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); zoom = z; cam.applyZoom(z) }).padding(horizontal = 11.dp, vertical = 6.dp))
                 }
                 if (caps?.isz == true) Text(if (iszOn) "ISZ" else "isz", color = if (iszOn) LatentColors.AmberInk else LatentColors.Amber, fontSize = 11.sp,
                     modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(999.dp)).background(if (iszOn) LatentColors.Amber else androidx.compose.ui.graphics.Color.Transparent).border(0.5.dp, LatentColors.Amber, RoundedCornerShape(999.dp))
-                        .combinedClickable(onClick = { iszOn = !iszOn; cam.isz = iszOn; cam.refresh() }).padding(horizontal = 8.dp, vertical = 3.dp))
-            } else Text("LENS: CHOSEN BY XIAOMI", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(12.dp))
-            caps?.let { c -> Text("ACCEPTS: " + listOfNotNull(if (c.zoom) "ZOOM" else null, if (c.ev) "EV" else null, if (c.manual) "MANUAL" else null, if (c.afRegions) "TAP-AF" else null, if (c.isz) "ISZ" else null).ifEmpty { listOf("NOTHING EXTRA") }.joinToString(" · "),
-                color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) }
-        }
-        caps?.let { c ->
-            if (c.ev && c.evRange != null) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("EV %+.1f".format(ev / 6.0), color = LatentColors.TextBright, fontSize = 12.sp, modifier = Modifier.padding(end = 10.dp))
-                androidx.compose.material3.Slider(value = ev.toFloat(), onValueChange = { v -> val n = Math.round(v); if (n != ev) { Haptics.tick(context); ev = n; cam.evIndex = n; cam.refresh() } },
-                    valueRange = c.evRange.lower.toFloat()..c.evRange.upper.toFloat(), steps = (c.evRange.upper - c.evRange.lower - 1).coerceAtLeast(0),
-                    colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = LatentColors.Amber, activeTrackColor = LatentColors.Amber, inactiveTrackColor = LatentColors.Line))
+                        .combinedClickable(onClick = { Haptics.tick(context); iszOn = !iszOn; cam.isz = iszOn; cam.refresh() }).padding(horizontal = 8.dp, vertical = 3.dp))
             }
-            if (c.manual && c.expRange != null && c.isoRange != null) {
-                val sPresets = com.celestial.latent.camera.ControlMath.shutterPresets(c.expRange.lower, c.expRange.upper)
-                val iPresets = com.celestial.latent.camera.ControlMath.isoPresets(c.isoRange.lower, c.isoRange.upper)
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("S " + (shutter?.let { com.celestial.latent.camera.ControlMath.shutterLabel(it) } ?: "A"), color = LatentColors.TextBright, fontSize = 12.sp, modifier = Modifier.padding(end = 10.dp).combinedClickable(onClick = { shutter = null; cam.shutterNs = null; cam.refresh() }))
-                    androidx.compose.material3.Slider(value = (shutter?.let { sh -> sPresets.indexOfFirst { it >= sh }.coerceAtLeast(0) } ?: 0).toFloat(), onValueChange = { v -> val ns = sPresets[Math.round(v).coerceIn(0, sPresets.size - 1)]; if (ns != shutter) { Haptics.tick(context); shutter = ns; cam.shutterNs = ns; cam.refresh() } },
-                        valueRange = 0f..(sPresets.size - 1).toFloat(), steps = (sPresets.size - 2).coerceAtLeast(0),
-                        colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = LatentColors.Amber, activeTrackColor = LatentColors.Amber, inactiveTrackColor = LatentColors.Line))
-                }
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("ISO " + (isoV?.toString() ?: "A"), color = LatentColors.TextBright, fontSize = 12.sp, modifier = Modifier.padding(end = 10.dp).combinedClickable(onClick = { isoV = null; cam.iso = null; cam.refresh() }))
-                    androidx.compose.material3.Slider(value = (isoV?.let { i -> iPresets.indexOfFirst { it >= i }.coerceAtLeast(0) } ?: 0).toFloat(), onValueChange = { v -> val i = iPresets[Math.round(v).coerceIn(0, iPresets.size - 1)]; if (i != isoV) { Haptics.tick(context); isoV = i; cam.iso = i; cam.refresh() } },
-                        valueRange = 0f..(iPresets.size - 1).toFloat(), steps = (iPresets.size - 2).coerceAtLeast(0),
-                        colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = LatentColors.Amber, activeTrackColor = LatentColors.Amber, inactiveTrackColor = LatentColors.Line))
-                }
+            Text(if (zoomOk) "LENS VIA ZOOM · JPEG ONLY" else "LENS CHOSEN BY XIAOMI · JPEG ONLY", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(12.dp))
+            if (toast.isNotEmpty()) Text(toast, color = LatentColors.TextBright, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp).clip(RoundedCornerShape(8.dp)).background(androidx.compose.ui.graphics.Color(0xCC161615)).padding(12.dp))
+            caps?.let { c ->
+                FocusEvOverlay(
+                    point = focusTap, evIndex = ev,
+                    evRange = (c.evRange?.let { it.lower..it.upper } ?: 0..0),
+                    onEv = { n -> if (c.ev) { ev = n; cam.evIndex = n; cam.refresh() } },
+                    onDismiss = { focusTap = null },
+                )
             }
         }
-        Spacer(Modifier.height(8.dp))
-        Text(status, color = LatentColors.Text, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
-        Spacer(Modifier.height(16.dp))
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        // Control strip: only what this extension accepts
+        val c = caps
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+            StripCell("EV", if (c?.ev == true) String.format("%+.1f", ev / 6.0).replace("+0.0", "0.0") else "—", false, selected == "EV", c?.ev != true || shutter != null, Modifier.weight(1f)) { if (c?.ev == true) selected = if (selected == "EV") "" else "EV" }
+            StripCell("S", if (c?.manual == true) (shutter?.let { com.celestial.latent.camera.ControlMath.shutterLabel(it) } ?: "auto") else "—", c?.manual == true && shutter == null, selected == "S", c?.manual != true, Modifier.weight(1f)) { if (c?.manual == true) selected = if (selected == "S") "" else "S" }
+            StripCell("ISO", if (c?.manual == true) (isoV?.toString() ?: "auto") else "—", c?.manual == true && isoV == null, selected == "ISO", c?.manual != true, Modifier.weight(1f)) { if (c?.manual == true) selected = if (selected == "ISO") "" else "ISO" }
+            StripCell("WB", "auto", true, false, true, Modifier.weight(1f)) {}
+            StripCell("FOCUS", if (c?.afRegions == true) "TAP" else "auto", c?.afRegions != true, false, c?.afRegions != true, Modifier.weight(1f)) {}
+        }
+        Box(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
+            when (selected) {
+                "EV" -> c?.evRange?.let { r -> StripSlider(ev.toFloat(), r.lower.toFloat(), r.upper.toFloat(), (r.upper - r.lower - 1).coerceAtLeast(0), { v -> ev = Math.round(v); cam.evIndex = ev; cam.refresh() }, { ev = 0; cam.evIndex = 0; cam.refresh() }, "0") }
+                "S" -> c?.expRange?.let { r -> val p = com.celestial.latent.camera.ControlMath.shutterPresets(r.lower, r.upper); val idx = shutter?.let { sh -> p.indexOfFirst { it >= sh }.coerceAtLeast(0) } ?: 0
+                    StripSlider(idx.toFloat(), 0f, (p.size - 1).toFloat(), (p.size - 2).coerceAtLeast(0), { v -> shutter = p[Math.round(v).coerceIn(0, p.size - 1)]; cam.shutterNs = shutter; cam.refresh() }, { shutter = null; cam.shutterNs = null; cam.refresh() }, "A") }
+                "ISO" -> c?.isoRange?.let { r -> val p = com.celestial.latent.camera.ControlMath.isoPresets(r.lower, r.upper); val idx = isoV?.let { i -> p.indexOfFirst { it >= i }.coerceAtLeast(0) } ?: 0
+                    StripSlider(idx.toFloat(), 0f, (p.size - 1).toFloat(), (p.size - 2).coerceAtLeast(0), { v -> isoV = p[Math.round(v).coerceIn(0, p.size - 1)]; cam.iso = isoV; cam.refresh() }, { isoV = null; cam.iso = null; cam.refresh() }, "A") }
+                else -> Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp).height(0.5.dp).background(LatentColors.Surface))
+            }
+        }
+        // Shutter row: thumbnail · shutter · spacer
+        Row(Modifier.fillMaxWidth().padding(horizontal = 30.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)).background(LatentColors.Surface).combinedClickable(onClick = {
+                Haptics.tick(context)
+                lastUri?.let { uri -> runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).apply { setDataAndType(uri, "image/jpeg"); addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }) } }
+            })) { thumb?.let { androidx.compose.foundation.Image(it.asImageBitmap(), contentDescription = "Last photo", contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize()) } }
             Box(Modifier.size(78.dp).clip(CircleShape).border(2.dp, LatentColors.TextBright, CircleShape).combinedClickable(onClick = { Haptics.heavy(context); cam.capture() }), contentAlignment = Alignment.Center) {
                 Box(Modifier.size(62.dp).clip(CircleShape).background(LatentColors.TextBright))
             }
+            Spacer(Modifier.size(46.dp))
         }
+        Text(extName(mode) + " · XIAOMI PROCESSING", color = LatentColors.Line, fontSize = 9.sp, letterSpacing = 1.5.sp, modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }

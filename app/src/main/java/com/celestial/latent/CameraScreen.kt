@@ -158,7 +158,6 @@ fun CameraScreen(
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
-    LaunchedEffect(focusTapAt) { if (focusTapAt > 0) { delay(1500); focusTap = null } }
     LaunchedEffect(settings.antibanding) { controller.setAntibanding(settings.antibanding) }
     LaunchedEffect(settings.cameraPath) { controller.cameraPath = settings.cameraPath }
     LaunchedEffect(settings.opmode) { controller.opmode = settings.opmode }
@@ -238,10 +237,12 @@ fun CameraScreen(
                     drawLine(c, Offset(0f, h / 3), Offset(w, h / 3), 1f); drawLine(c, Offset(0f, 2 * h / 3), Offset(w, 2 * h / 3), 1f)
                 }
             }
-            focusTap?.let { p ->
-                val boxPx = with(LocalDensity.current) { 72.dp.toPx() }
-                Box(Modifier.offset { IntOffset((p.x - boxPx / 2).toInt(), (p.y - boxPx / 2).toInt()) }.size(72.dp).border(1.dp, LatentColors.Amber, RoundedCornerShape(4.dp)))
-            }
+            FocusEvOverlay(
+                point = focusTap, evIndex = controls.evIndex,
+                evRange = (if (controller.hasCharacteristics) controller.evRange.lower..controller.evRange.upper else -24..24),
+                onEv = { n -> if (!controls.manualExposure) push(controls.copy(evIndex = n)) },
+                onDismiss = { focusTap = null },
+            )
             // Quiet captions overlaid on the image.
             Text(if (settings.saveJpeg) "RAW + JPG · 12.5M" else "RAW · 12.5M", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
             val modes = listOfNotNull(
@@ -374,10 +375,10 @@ private fun Tile(label: String, on: Boolean, modifier: Modifier, onToggle: (Bool
     ) { Text(label, color = if (on) LatentColors.AmberInk else LatentColors.TextBright, fontSize = 10.sp, lineHeight = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
 }
 
-private fun focusLabel(d: Float): String = when { d <= 0.05f -> "∞"; d < 1f -> String.format("%.1fm", 1 / d); else -> String.format("%.0fcm", 100 / d) }
+internal fun focusLabel(d: Float): String = when { d <= 0.05f -> "∞"; d < 1f -> String.format("%.1fm", 1 / d); else -> String.format("%.0fcm", 100 / d) }
 
 @Composable
-private fun StripCell(label: String, value: String, auto: Boolean, selected: Boolean, dim: Boolean, modifier: Modifier, onClick: () -> Unit) {
+internal fun StripCell(label: String, value: String, auto: Boolean, selected: Boolean, dim: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Column(modifier.combinedClickable(onClick = onClick).padding(vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(value, color = if (dim) LatentColors.Line else if (selected) LatentColors.Amber else LatentColors.TextBright, fontSize = 16.sp, fontWeight = FontWeight.Light)
         Text(if (auto) "$label · A" else label, color = LatentColors.TextDim, fontSize = 9.sp, letterSpacing = 1.5.sp, modifier = Modifier.padding(top = 2.dp))
@@ -385,7 +386,7 @@ private fun StripCell(label: String, value: String, auto: Boolean, selected: Boo
 }
 
 @Composable
-private fun StripSlider(value: Float, min: Float, max: Float, steps: Int, onChange: (Float) -> Unit, onAuto: () -> Unit, autoLabel: String, enabled: Boolean = true) {
+internal fun StripSlider(value: Float, min: Float, max: Float, steps: Int, onChange: (Float) -> Unit, onAuto: () -> Unit, autoLabel: String, enabled: Boolean = true) {
     val context = LocalContext.current
     var lastTick by remember { mutableStateOf(value) }
     val tickEvery = if (steps > 0) (max - min) / (steps + 1) else (max - min) / 24f
@@ -398,5 +399,56 @@ private fun StripSlider(value: Float, min: Float, max: Float, steps: Int, onChan
         Spacer(Modifier.width(12.dp))
         Slider(value = value.coerceIn(min, max), onValueChange = onChangeHaptic, valueRange = min..max, steps = steps, enabled = enabled,
             colors = SliderDefaults.colors(thumbColor = LatentColors.Amber, activeTrackColor = LatentColors.Amber, inactiveTrackColor = LatentColors.Line), modifier = Modifier.weight(1f))
+    }
+}
+
+
+/**
+ * Focus box at the tap point with a vertical exposure slider beside it (Xiaomi/iPhone style).
+ * Drag anywhere on the overlay up/down to change EV; the box fades after a few seconds of no interaction.
+ */
+@Composable
+internal fun FocusEvOverlay(
+    point: Offset?,
+    evIndex: Int,
+    evRange: IntRange,
+    onEv: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val p = point ?: return
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    var lastTick by remember(p) { mutableStateOf(evIndex) }
+    var touchedAt by remember(p) { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(touchedAt) { delay(2500); onDismiss() }
+    val boxPx = with(density) { 72.dp.toPx() }
+    val trackPx = with(density) { 120.dp.toPx() }
+    Box(
+        Modifier.fillMaxSize().pointerInput(p) {
+            androidx.compose.foundation.gestures.detectVerticalDragGestures(
+                onDragStart = { touchedAt = System.currentTimeMillis() },
+                onVerticalDrag = { change, dragAmount ->
+                    change.consume()
+                    touchedAt = System.currentTimeMillis()
+                    // 120dp of drag spans the whole EV range; up = brighter.
+                    val perStep = trackPx / (evRange.last - evRange.first).coerceAtLeast(1)
+                    val delta = -dragAmount / perStep
+                    val next = (evIndex + delta).let { Math.round(it) }.coerceIn(evRange.first, evRange.last)
+                    if (next != evIndex) { if (next != lastTick) { Haptics.tick(context); lastTick = next }; onEv(next) }
+                },
+            )
+        },
+    ) {
+        // Box
+        Box(Modifier.offset { IntOffset((p.x - boxPx / 2).toInt(), (p.y - boxPx / 2).toInt()) }.size(72.dp).border(1.dp, LatentColors.Amber, RoundedCornerShape(4.dp)))
+        // Slider track to the right of the box (or left if near the edge)
+        val screenW = with(density) { androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp.toPx() }
+        val onRight = p.x + boxPx / 2 + with(density) { 40.dp.toPx() } < screenW
+        val tx = if (onRight) p.x + boxPx / 2 + with(density) { 14.dp.toPx() } else p.x - boxPx / 2 - with(density) { 14.dp.toPx() }
+        val frac = (evIndex - evRange.first).toFloat() / (evRange.last - evRange.first).coerceAtLeast(1)
+        Box(Modifier.offset { IntOffset(tx.toInt(), (p.y - trackPx / 2).toInt()) }.size(2.dp, 120.dp).background(LatentColors.Line))
+        Box(Modifier.offset { IntOffset((tx - with(density) { 5.dp.toPx() }).toInt(), (p.y + trackPx / 2 - frac * trackPx - with(density) { 6.dp.toPx() }).toInt()) }.size(12.dp).clip(CircleShape).background(LatentColors.Amber))
+        Text(String.format("%+.1f", evIndex / 6.0).replace("+0.0", "0.0"), color = LatentColors.Amber, fontSize = 11.sp,
+            modifier = Modifier.offset { IntOffset((tx + with(density) { 12.dp.toPx() }).toInt(), (p.y - trackPx / 2 - with(density) { 18.dp.toPx() }).toInt()) })
     }
 }

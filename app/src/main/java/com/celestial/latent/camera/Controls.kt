@@ -35,34 +35,22 @@ object ControlMath {
     fun shutterLabel(ns: Long): String {
         if (ns <= 0) return "—"
         val s = ns / 1e9
-        return if (s >= 1.0) String.format("%.1f\"", s) else "1/" + Math.round(1.0 / s)
+        return if (s >= 1.0) (if (s == Math.floor(s)) "${s.toInt()}\"" else String.format("%.1f\"", s)) else if (s >= 0.25) String.format("%.1f\"", s) else "1/" + Math.round(1.0 / s)
     }
 
-    /** Shutter presets in 1/3 stops that the lens supports. */
+    /** Standard third-stop shutter ladder (the numbers real cameras show), limited to what the lens supports. */
+    private val SHUTTER_DENOMS = listOf(8000, 6400, 5000, 4000, 3200, 2500, 2000, 1600, 1250, 1000, 800, 640, 500, 400, 320, 250, 200, 160, 125, 100, 80, 60, 50, 40, 30, 25, 20, 15, 13, 10, 8, 6, 5, 4)
+    private val SHUTTER_SECONDS = listOf(0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.3, 1.6, 2.0)
     fun shutterPresets(minNs: Long, maxNs: Long): List<Long> {
         val out = ArrayList<Long>()
-        var s = 1.0 / 16000
-        while (s <= 2.0) {
-            val ns = (s * 1e9).toLong()
-            if (ns in minNs..maxNs) out += ns
-            s *= 2.0.pow(1.0 / 3.0)
-        }
-        // Snap the last one to exactly 1s if the lens allows it.
-        if (maxNs >= 1_000_000_000L && out.none { it == 1_000_000_000L }) out += 1_000_000_000L
+        for (d in SHUTTER_DENOMS.reversed()) { val ns = Math.round(1e9 / d); if (ns in minNs..maxNs) out += ns }
+        for (sec in SHUTTER_SECONDS) { val ns = Math.round(sec * 1e9); if (ns in minNs..maxNs) out += ns }
         return out.distinct().sorted()
     }
 
-    /** ISO presets in 1/3 stops within range. */
-    fun isoPresets(min: Int, max: Int): List<Int> {
-        val out = ArrayList<Int>()
-        var v = 25.0
-        while (v <= 25600) {
-            val i = Math.round(v).toInt()
-            if (i in min..max) out += i
-            v *= 2.0.pow(1.0 / 3.0)
-        }
-        return out.distinct().sorted()
-    }
+    /** Standard third-stop ISO ladder within range. */
+    private val ISO_LADDER = listOf(25, 32, 40, 50, 64, 80, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000, 6400, 8000, 10000, 12800)
+    fun isoPresets(min: Int, max: Int): List<Int> = ISO_LADDER.filter { it in min..max }
 
     // ---- White balance: Kelvin -> per-channel gains, using the sensor's own colour matrices ----
     // This is the same maths a DNG converter uses: find the XYZ of the illuminant, push it
