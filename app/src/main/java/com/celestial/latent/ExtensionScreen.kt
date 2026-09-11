@@ -218,7 +218,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
                         })
                     try { cam.createExtensionSession(cfg) } catch (e: Exception) { onStatus("createExtensionSession: ${e.message}") }
                 }
-                override fun onDisconnected(cam: CameraDevice) { cam.close(); device = null }
+                override fun onDisconnected(cam: CameraDevice) { try { session?.close() } catch (_: Exception) {}; session = null; cam.close(); device = null }
                 override fun onError(cam: CameraDevice, error: Int) { onStatus("camera error $error"); cam.close(); device = null }
             }, handler)
         } catch (e: Exception) { onStatus("open: ${e.message}") }
@@ -237,6 +237,8 @@ class ExtensionCamera(private val context: android.content.Context, private val 
     }
 
     fun switchTo(ext: Int) { extension = ext; openOnTexture() }
+    /** After Android took the camera away (background / gallery), reopen on the same texture. */
+    fun reopenIfNeeded() = handler.post { if (device == null && surfaceTexture != null) { android.util.Log.i("Latent", "extension: reopening after resume"); openOnTexture() } }
     fun applyZoom(z: Float) {
         zoom = z
         // Night honours a live zoom change; Auto/Portrait only read zoom when the session is created.
@@ -276,6 +278,18 @@ fun ExtensionScreen(onBack: () -> Unit) {
         }
     }
     DisposableEffect(Unit) { onDispose { cam.destroy() } }
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> cam.reopenIfNeeded()
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> cam.close()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     androidx.compose.runtime.LaunchedEffect(status) { val l = status.lowercase(); if (l.contains("fail") || l.contains("refused") || l.contains("error") || l.contains("processing")) { toast = status; kotlinx.coroutines.delay(2500); toast = "" } }
     fun resetManual() { ev = 0; shutter = null; isoV = null; cam.evIndex = 0; cam.shutterNs = null; cam.iso = null; selected = "" }
 
@@ -313,12 +327,21 @@ fun ExtensionScreen(onBack: () -> Unit) {
             Text("XIAOMI " + extName(mode) + " · JPG", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
             caps?.let { c -> Text(listOfNotNull(if (c.zoom) "ZOOM" else null, if (c.ev) "EV" else null, if (c.manual) "MANUAL" else null, if (c.afRegions) "TAP-AF" else null, if (c.isz) "ISZ" else null).ifEmpty { listOf("AUTO ONLY") }.joinToString(" · "),
                 color = LatentColors.Amber, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) }
+            // Same row as the main screen: lens ratios, then ×2 relative to the chosen lens (sent as one zoom ratio).
+            var baseZoom by remember { mutableStateOf(1f) }
+            var x2 by remember { mutableStateOf(false) }
+            fun send() { zoom = baseZoom * (if (x2) 2f else 1f); cam.applyZoom(zoom) }
             if (zoomOk) Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp), verticalAlignment = Alignment.CenterVertically) {
-                listOf(0.6f, 1f, 2f, 3f, 4.3f, 6f, 8.6f).forEach { z ->
-                    val on = zoom == z
-                    Text(if (on) "${z}×".replace(".0×", "×") else "$z".removeSuffix(".0"), color = if (on) LatentColors.TextBright else LatentColors.Text, fontSize = if (on) 15.sp else 12.sp,
-                        modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); zoom = z; cam.applyZoom(z) }).padding(horizontal = 8.dp, vertical = 6.dp))
+                listOf(0.6f to "0.6", 1f to "1", 3f to "3", 4.3f to "4.3").forEach { (z, label) ->
+                    val on = baseZoom == z
+                    Text(if (on) "$label×" else label, color = if (on) LatentColors.TextBright else LatentColors.Text, fontSize = if (on) 15.sp else 12.sp,
+                        modifier = Modifier.combinedClickable(onClick = { if (!on) { Haptics.tick(context); baseZoom = z; send() } }).padding(horizontal = 11.dp, vertical = 6.dp))
                 }
+                Spacer(Modifier.size(6.dp))
+                val effective = String.format("%.1f", baseZoom * 2).removeSuffix(".0")
+                Text(if (x2) "$effective×" else "×2", color = if (x2) LatentColors.AmberInk else LatentColors.Amber, fontSize = 11.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(if (x2) LatentColors.Amber else androidx.compose.ui.graphics.Color.Transparent).border(0.5.dp, LatentColors.Amber, RoundedCornerShape(999.dp))
+                        .combinedClickable(onClick = { Haptics.tick(context); x2 = !x2; send() }).padding(horizontal = 9.dp, vertical = 3.dp))
                 if (caps?.isz == true) Text(if (iszOn) "ISZ" else "isz", color = if (iszOn) LatentColors.AmberInk else LatentColors.Amber, fontSize = 11.sp,
                     modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(999.dp)).background(if (iszOn) LatentColors.Amber else androidx.compose.ui.graphics.Color.Transparent).border(0.5.dp, LatentColors.Amber, RoundedCornerShape(999.dp))
                         .combinedClickable(onClick = { Haptics.tick(context); iszOn = !iszOn; cam.isz = iszOn; cam.refresh() }).padding(horizontal = 8.dp, vertical = 3.dp))
