@@ -51,6 +51,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.celestial.latent.camera.CameraController
 import com.celestial.latent.camera.ControlMath
 import com.celestial.latent.camera.Controls
@@ -89,6 +92,19 @@ fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChange
     DisposableEffect(Unit) {
         ShutterBus.onShutter = { if (settings.volumeShutter) controller.captureSingle() }
         onDispose { ShutterBus.onShutter = null; controller.destroy() }
+    }
+    // Android takes the camera away in the background; get it back on resume.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> controller.reopenIfNeeded()
+                Lifecycle.Event.ON_PAUSE -> controller.close()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
     LaunchedEffect(settings.antibanding) { controller.setAntibanding(settings.antibanding) }
     LaunchedEffect(settings.cameraPath) { controller.cameraPath = settings.cameraPath }

@@ -28,6 +28,14 @@ object CameraReport {
 
         val ids = try { cm.cameraIdList.toList() } catch (t: Throwable) { sb.appendLine("cameraIdList failed: $t"); emptyList() }
         sb.appendLine("Public camera IDs: $ids")
+        // Camera Extensions (OEM bokeh/night/HDR exposed to third parties via the official API).
+        if (Build.VERSION.SDK_INT >= 31) {
+            for (id in ids) {
+                val ext = try { cm.getCameraExtensionCharacteristics(id).supportedExtensions } catch (t: Throwable) { null }
+                val names = ext?.map { when (it) { 0 -> "AUTOMATIC"; 1 -> "FACE_RETOUCH"; 2 -> "BOKEH"; 3 -> "HDR"; 4 -> "NIGHT"; else -> "ext$it" } }
+                sb.appendLine("Extensions on camera $id: ${names ?: "none / unsupported"}")
+            }
+        }
         sb.appendLine()
 
         for (id in ids) {

@@ -108,8 +108,10 @@ private fun Root() {
             onOpenReport = { screen = "report" },
             onOpenVendor = { screen = "vendor" },
             onOpenProbe = { screen = "probe" },
+            onOpenLogs = { screen = "logs" },
             onBack = { screen = "camera" },
         )
+        "logs" -> LogScreen(onBack = { screen = "settings" })
         "probe" -> ProbeScreen(settings = settings, onBack = { screen = "settings" })
         "vendor" -> VendorScreen(
             settings = settings,

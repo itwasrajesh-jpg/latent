@@ -145,7 +145,7 @@ class CameraController(
                 }
                 jpegReader = if (saveJpeg) {
                     val jpegSize = map.getOutputSizes(ImageFormat.JPEG).maxByOrNull { it.width.toLong() * it.height } ?: rawSize
-                    ImageReader.newInstance(jpegSize.width, jpegSize.height, ImageFormat.JPEG, 2).also {
+                    ImageReader.newInstance(jpegSize.width, jpegSize.height, ImageFormat.JPEG, 4).also {
                         it.setOnImageAvailableListener({ r -> onJpegImage(r) }, handler)
                     }
                 } else null
@@ -153,8 +153,8 @@ class CameraController(
                 status("Opening ${lens.name} (${lens.label}) · RAW ${rawSize.width}x${rawSize.height}")
                 val idToOpen = if (directOpen) lens.physicalId else logicalId
                 cm.openCamera(idToOpen, object : CameraDevice.StateCallback() {
-                    override fun onOpened(cam: CameraDevice) { device = cam; createSession() }
-                    override fun onDisconnected(cam: CameraDevice) { log("camera disconnected"); cam.close(); device = null }
+                    override fun onOpened(cam: CameraDevice) { log("opened camera $idToOpen for lens ${lens.physicalId}${if (directOpen) " (direct)" else ""}"); device = cam; createSession() }
+                    override fun onDisconnected(cam: CameraDevice) { log("camera disconnected (background or another app took it)"); try { session?.close() } catch (_: Exception) {}; session = null; cam.close(); device = null }
                     override fun onError(cam: CameraDevice, error: Int) { status("Camera error $error"); cam.close(); device = null }
                 }, handler)
             } catch (e: Exception) {
@@ -181,7 +181,7 @@ class CameraController(
         if (!directOpen) outputs.forEach { it.setPhysicalCameraId(lens.physicalId) }
         val sessionType = if (opmode != 0) opmode else SessionConfiguration.SESSION_REGULAR
         val config = SessionConfiguration(sessionType, outputs, executor, object : CameraCaptureSession.StateCallback() {
-            override fun onConfigured(s: CameraCaptureSession) { session = s; startPreview() }
+            override fun onConfigured(s: CameraCaptureSession) { log("session configured: ${outputs.size} streams, opmode=${if (opmode != 0) "0x" + Integer.toHexString(opmode) else "regular"}, tags=${allTags().map { it.name.substringAfterLast('.') + "=" + it.value }}"); session = s; startPreview() }
             override fun onConfigureFailed(s: CameraCaptureSession) {
                 if (!directOpen) {
                     log("session via logical camera failed; retrying with direct open of ${lens.physicalId}")
@@ -455,7 +455,7 @@ class CameraController(
             if (job == null) {
                 val base = fileBase()
                 baseNames[img.timestamp] = base
-                pendingJpegs.remove(img.timestamp)?.let { saveJpegBytes(base, it) }
+                flushPendingJpeg(img.timestamp, base)
                 if (baseNames.size > 8) baseNames.remove(baseNames.keys.minOrNull()!!)
                 val name = "$base.dng"
                 val ms = writeDngCreator(img, result, name)
@@ -525,14 +525,29 @@ class CameraController(
         return "LATENT_${stamp}_${lens.label.replace(".", "_")}_$kind"
     }
 
+    /** Nearest known base name within 100 ms of a timestamp (JPEG and RAW stamps can differ slightly). */
+    private fun nearestBase(ts: Long): String? {
+        val hit = baseNames.entries.minByOrNull { Math.abs(it.key - ts) } ?: return null
+        return if (Math.abs(hit.key - ts) <= 100_000_000L) hit.value else null
+    }
+
     private fun onJpegImage(reader: ImageReader) {
         val img = reader.acquireNextImage() ?: return
         try {
             val buf = img.planes[0].buffer
             val bytes = ByteArray(buf.remaining()); buf.get(bytes)
-            val base = baseNames[img.timestamp]
+            val base = nearestBase(img.timestamp)
+            log("jpeg arrived ts=${img.timestamp} ${bytes.size / 1024} KB → ${base ?: "waiting for RAW name"}")
             if (base != null) saveJpegBytes(base, bytes) else pendingJpegs[img.timestamp] = bytes
         } catch (e: Exception) { log("jpeg: ${e.message}") } finally { img.close() }
+    }
+
+    /** Called once a RAW has been named: save any JPEG that arrived earlier for (about) the same frame. */
+    private fun flushPendingJpeg(ts: Long, base: String) {
+        val key = pendingJpegs.keys.minByOrNull { Math.abs(it - ts) } ?: return
+        if (Math.abs(key - ts) <= 100_000_000L) pendingJpegs.remove(key)?.let { saveJpegBytes(base, it) }
+        // Drop anything older than 5 s that never found its RAW.
+        pendingJpegs.keys.filter { ts - it > 5_000_000_000L }.forEach { pendingJpegs.remove(it); log("jpeg ts=$it never matched a RAW; dropped") }
     }
 
     private fun saveJpegBytes(base: String, bytes: ByteArray) {
@@ -619,6 +634,12 @@ class CameraController(
 
     fun close() = handler.post { closeInternal() }
 
+    /** Reopen the last lens on the last surface (used on resume after Android took the camera away). */
+    fun reopenIfNeeded() = handler.post {
+        val surf = previewSurface
+        if (device == null && surf != null && surf.isValid) { log("reopening after resume"); open(lens, surf) }
+    }
+
     private fun closeInternal() {
         try { session?.close() } catch (_: Exception) {}
         session = null
@@ -666,7 +687,7 @@ class CameraController(
                 val base = fileBase("BURST1")
                 firstName = "$base.dng"
                 baseNames[ts] = base
-                pendingJpegs.remove(ts)?.let { saveJpegBytes(base, it) }
+                flushPendingJpeg(ts, base)
                 writeDngCreator(img, result, firstName)
                 val r = ShortArray(w * h); readInto(img, r); ref = r
                 refPyr = Align.pyramid(r, w, h)
