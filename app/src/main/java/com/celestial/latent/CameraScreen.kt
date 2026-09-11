@@ -190,8 +190,8 @@ fun CameraScreen(settings: AppSettings, onOpenSettings: () -> Unit, onLensChange
         }
 
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center) {
-            // 2x on the main lens: digital crop by default; in-sensor crop if the vendor tag is enabled.
-            if (lens.physicalId == "2") {
+            // 2x request on any lens: digital crop unless a vendor tag / sensor mode makes it in-sensor.
+            run {
                 Text(
                     text = "2x", color = if (controls.zoom == 2f) LatentColors.Amber else LatentColors.Text, fontSize = 13.sp,
                     modifier = Modifier.padding(horizontal = 6.dp).clip(RoundedCornerShape(999.dp))

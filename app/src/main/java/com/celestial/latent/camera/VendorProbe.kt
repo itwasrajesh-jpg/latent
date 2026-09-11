@@ -112,23 +112,80 @@ class VendorProbe(private val context: Context) {
         return sb.toString()
     }
 
-    data class Outcome(val ok: Boolean, val note: String, val rawW: Int = 0, val rawH: Int = 0, val crop: String = "", val focal: String = "", val echo: String = "") {
-        override fun toString() = if (ok) "ok raw=${rawW}x$rawH crop=$crop focal=$focal echo=$echo" else "FAILED: $note"
+    data class Outcome(
+        val ok: Boolean, val note: String, val rawW: Int = 0, val rawH: Int = 0, val crop: String = "", val focal: String = "", val echo: String = "",
+        val whiteLevel: String = "", val blackLevel: String = "", val exposure: String = "", val frameNs: String = "", val thumb: FloatArray? = null,
+    ) {
+        override fun toString() = if (ok) "ok raw=${rawW}x$rawH crop=$crop focal=$focal echo=$echo white=$whiteLevel black=$blackLevel exp=$exposure frame=$frameNs" else "FAILED: $note"
+    }
+
+    /** 64x48 grey thumbnail of a RAW frame (mean of each 2x2 CFA cell, then box-downsampled). */
+    private fun thumbnail(img: android.media.Image): FloatArray {
+        val w = img.width; val h = img.height
+        val plane = img.planes[0]; val stride = plane.rowStride
+        val sb = plane.buffer.order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
+        val tw = 64; val th = 48
+        val out = FloatArray(tw * th)
+        val cw = w / tw; val chh = h / th
+        val row = ShortArray(w)
+        val acc = FloatArray(tw); val cnt = IntArray(tw)
+        for (y in 0 until h step 4) {
+            sb.position(y * stride / 2); sb.get(row, 0, w)
+            val ty = (y / chh).coerceAtMost(th - 1)
+            for (x in 0 until w step 4) { val tx = (x / cw).coerceAtMost(tw - 1); acc[tx] += (row[x].toInt() and 0xFFFF).toFloat(); cnt[tx]++ }
+            if ((y + 4) / chh != ty || y + 4 >= h) { for (tx in 0 until tw) { out[ty * tw + tx] += if (cnt[tx] > 0) acc[tx] / cnt[tx] else 0f; acc[tx] = 0f; cnt[tx] = 0 } }
+        }
+        return out
+    }
+
+    /** Compare a thumbnail to the baseline: is it the same view, the baseline's centre 2x crop, or something else? */
+    private fun classify(t: FloatArray?, base: FloatArray?): String {
+        if (t == null || base == null) return "?"
+        fun norm(a: FloatArray): FloatArray { val m = a.average().toFloat().coerceAtLeast(1f); return FloatArray(a.size) { a[it] / m } }
+        val a = norm(t); val b = norm(base)
+        // centre 2x crop of baseline, upsampled to 64x48
+        val c = FloatArray(64 * 48) { i -> val x = i % 64; val y = i / 64; base[(12 + y / 2) * 64 + (16 + x / 2)] }
+        val cn = norm(c)
+        fun err(p: FloatArray, q: FloatArray): Float { var e = 0f; for (i in p.indices) e += Math.abs(p[i] - q[i]); return e / p.size }
+        val eFull = err(a, b); val eCrop = err(a, cn)
+        return when {
+            eFull < 0.08f && eFull <= eCrop -> "same view as baseline (%.3f)".format(eFull)
+            eCrop < 0.12f && eCrop < eFull -> "≈ centre 2x crop of baseline (%.3f vs %.3f) ← IN-SENSOR CROP".format(eCrop, eFull)
+            else -> "different from both (full %.3f, crop %.3f)".format(eFull, eCrop)
+        }
     }
 
     /** Runs a test; if the camera service is restarting (no characteristics), waits and retries once. */
-    private fun runOneRetry(path: String, lens: Lens, key: String?, zoom: Float): Outcome {
-        var r = runOne(path, lens, key, zoom)
+    private fun runOneRetry(path: String, lens: Lens, key: String?, zoom: Float, value: Int = 1): Outcome {
+        var r = runOne(path, lens, key, zoom, value)
         if (!r.ok && (r.note.startsWith("no characteristics") || r.note.startsWith("open") || r.note == "disconnected")) {
             Thread.sleep(4000)
-            r = runOne(path, lens, key, zoom)
+            r = runOne(path, lens, key, zoom, value)
             if (!r.ok) Thread.sleep(3000)
         }
         return r
     }
 
+    /** Sweep sensor mode indices via sensor_meta_data.current_mode (request scope). */
     @SuppressLint("MissingPermission")
-    private fun runOne(path: String, lens: Lens, key: String?, zoom: Float): Outcome {
+    fun sensorModeSweep(path: String, lens: Lens, from: Int, to: Int, progress: (String) -> Unit): String {
+        val key = "org.codeaurora.qcamera3.sensor_meta_data.current_mode"
+        val sb = StringBuilder("LATENT SENSOR MODE SWEEP · path=$path lens=${lens.physicalId} (${lens.name}) · $key\n")
+        progress("baseline…")
+        val base = runOneRetry(path, lens, null, 1f)
+        sb.appendLine("baseline: $base")
+        for (m in from..to) {
+            progress("mode $m / $to")
+            val r = runOneRetry(path, lens, key, 1f, m)
+            val cls = if (r.ok) classify(r.thumb, base.thumb) else ""
+            val flag = if (r.ok && (r.whiteLevel != base.whiteLevel || r.blackLevel != base.blackLevel)) " ← LEVELS CHANGED" else ""
+            sb.appendLine("mode $m: $r · $cls$flag")
+        }
+        return sb.toString()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun runOne(path: String, lens: Lens, key: String?, zoom: Float, value: Int = 1): Outcome {
         val direct = path == "direct"
         val physChars = try { cm.getCameraCharacteristics(lens.physicalId) } catch (t: Throwable) { return Outcome(false, "no characteristics") }
         val map = physChars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Outcome(false, "no stream map")
@@ -141,14 +198,15 @@ class VendorProbe(private val context: Context) {
         var outcome = Outcome(false, "timeout")
         val done = CountDownLatch(1)
         var rawW = 0; var rawH = 0
+        var thumb: FloatArray? = null
         var result: TotalCaptureResult? = null
         val gotImage = CountDownLatch(1); val gotResult = CountDownLatch(1)
-        reader.setOnImageAvailableListener({ r -> r.acquireNextImage()?.let { img -> rawW = img.width; rawH = img.height; img.close() }; gotImage.countDown() }, handler)
+        reader.setOnImageAvailableListener({ r -> r.acquireNextImage()?.let { img -> rawW = img.width; rawH = img.height; thumb = runCatching { thumbnail(img) }.getOrNull(); img.close() }; gotImage.countDown() }, handler)
 
         fun finish(o: Outcome) { outcome = o; done.countDown() }
         fun setKey(b: CaptureRequest.Builder) {
             if (zoom != 1f) b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
-            if (key != null) try { b.set(CaptureRequest.Key(key, Int::class.javaObjectType), 1) } catch (t: Throwable) { try { b.set(CaptureRequest.Key(key, Byte::class.javaObjectType), 1.toByte()) } catch (_: Throwable) {} } }
+            if (key != null) try { b.set(CaptureRequest.Key(key, Int::class.javaObjectType), value) } catch (t: Throwable) { try { b.set(CaptureRequest.Key(key, Byte::class.javaObjectType), value.toByte()) } catch (_: Throwable) {} } }
 
         try {
             cm.openCamera(if (direct) lens.physicalId else path, object : CameraDevice.StateCallback() {
@@ -196,7 +254,11 @@ class VendorProbe(private val context: Context) {
                 val echo = if (key == null) "" else (runCatching { pr.get(CaptureResult.Key(key, IntArray::class.java))?.joinToString() }.getOrNull()
                     ?: runCatching { pr.get(CaptureResult.Key(key, Int::class.javaObjectType))?.toString() }.getOrNull()
                     ?: runCatching { pr.get(CaptureResult.Key(key, ByteArray::class.java))?.joinToString() }.getOrNull() ?: "not reported")
-                finish(Outcome(true, "", rawW, rawH, crop, focal, echo))
+                val white = pr.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)?.toString() ?: "?"
+                val black = pr.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)?.joinToString() ?: "?"
+                val exp = pr.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { "%.1fms".format(it / 1e6) } ?: "?"
+                val fd = pr.get(CaptureResult.SENSOR_FRAME_DURATION)?.let { "%.1fms".format(it / 1e6) } ?: "?"
+                finish(Outcome(true, "", rawW, rawH, crop, focal, echo, white, black, exp, fd, thumb))
             }
             Thread.sleep(50)
         }

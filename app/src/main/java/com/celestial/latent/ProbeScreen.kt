@@ -87,6 +87,12 @@ fun ProbeScreen(settings: AppSettings, onBack: () -> Unit) {
                 context.startActivity(Intent.createChooser(send, "Share probe"))
             }
         }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Btn("Sensor mode sweep 0–63 on ${settings.cameraPath}/${lens.physicalId}", !running) {
+                run { probe.sensorModeSweep(settings.cameraPath, lens, 0, 63) { p -> progress = p } }
+            }
+        }
         if (progress.isNotEmpty()) { Spacer(Modifier.height(8.dp)); Text(progress, color = LatentColors.Amber, fontSize = 12.sp) }
         Spacer(Modifier.height(12.dp))
         Text(output, color = LatentColors.Text, fontSize = 10.sp, lineHeight = 13.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.fillMaxWidth())
