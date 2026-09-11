@@ -115,8 +115,10 @@ private fun Root() {
             onOpenVendor = { screen = "vendor" },
             onOpenProbe = { screen = "probe" },
             onOpenLogs = { screen = "logs" },
+            onOpenExtension = { screen = "extension" },
             onBack = { screen = "camera" },
         )
+        "extension" -> if (android.os.Build.VERSION.SDK_INT >= 31) ExtensionScreen(onBack = { screen = "settings" }) else { screen = "settings" }
         "logs" -> LogScreen(onBack = { screen = "settings" })
         "probe" -> ProbeScreen(settings = settings, onBack = { screen = "settings" })
         "vendor" -> VendorScreen(

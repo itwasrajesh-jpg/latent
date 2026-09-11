@@ -31,7 +31,7 @@ import com.celestial.latent.camera.Lenses
 import com.celestial.latent.ui.LatentColors
 
 @Composable
-fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpenReport: () -> Unit, onOpenVendor: () -> Unit, onOpenProbe: () -> Unit, onOpenLogs: () -> Unit, onBack: () -> Unit) {
+fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpenReport: () -> Unit, onOpenVendor: () -> Unit, onOpenProbe: () -> Unit, onOpenLogs: () -> Unit, onOpenExtension: () -> Unit, onBack: () -> Unit) {
     Column(
         Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().navigationBarsPadding()
             .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
@@ -57,6 +57,10 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
         ToggleRow("In-sensor staggered HDR", "Sends inSensorSHDRMode=1. Same caveat.", settings.sensorShdr) { onChange(settings.copy(sensorShdr = it)) }
 
         Section("Files")
+        ToggleRow("Better JPEG", "Asks the driver for multi-frame noise reduction, snapshot HDR and high-quality post-processing on the JPEG. RAW is unchanged. Turns on RAW + JPEG.", settings.betterJpeg) {
+            onChange(settings.copy(betterJpeg = it, saveJpeg = if (it) true else settings.saveJpeg))
+        }
+        ToggleRow("Ultra HDR JPEG", "Asks for a gain-map JPEG (brighter highlights on HDR screens). Experimental.", settings.ultraHdrJpeg) { onChange(settings.copy(ultraHdrJpeg = it)) }
         OptionRow(
             title = "Format",
             subtitle = "RAW is always saved. The JPEG is the camera driver's own processed copy, handy for sharing; it is not the film-developed result.",
@@ -69,6 +73,7 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
             onChange(settings.copy(inSensorZoomJpeg = it, saveJpeg = if (it) true else settings.saveJpeg))
         }
         ToggleRow("Volume buttons take the photo", "Either volume key acts as the shutter", settings.volumeShutter) { onChange(settings.copy(volumeShutter = it)) }
+        ToggleRow("Haptics", "Click on the shutter, ticks on slider steps and lens changes", settings.haptics) { onChange(settings.copy(haptics = it)) }
         ToggleRow("Remember last lens", "Open on the lens you used last time", settings.rememberLens) { onChange(settings.copy(rememberLens = it)) }
         OptionRow(
             title = "Default lens",
@@ -76,6 +81,10 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
             options = Lenses.ALL.map { it.label to it.physicalId },
             selected = settings.defaultLensId,
         ) { onChange(settings.copy(defaultLensId = it)) }
+
+        Section("Xiaomi processing (official extensions)")
+        Text("Portrait / Night test ›", color = LatentColors.Amber, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onOpenExtension).padding(vertical = 10.dp))
+        Text("Xiaomi's own bokeh and night modes via Android's Camera Extensions. JPEG only, main camera.", color = LatentColors.TextDim, fontSize = 12.sp)
 
         Section("Diagnostics")
         OptionRow(

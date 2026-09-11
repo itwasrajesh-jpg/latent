@@ -28,6 +28,9 @@ data class AppSettings(
     val sensorShdr: Boolean = false,        // inSensorSHDRMode=1 (experimental)
     val timerSeconds: Int = 0,              // 0 / 3 / 10
     val burstMode: Boolean = false,         // tap = 16-frame burst (hold = single)
+    val haptics: Boolean = true,
+    val betterJpeg: Boolean = false,   // driver multi-frame NR + snapshot HDR + HQ post-processing (JPEG path only)
+    val ultraHdrJpeg: Boolean = false, // com.xiaomi.sessionparams.jpegrEnable=1 (gain-map JPEG)
 ) {
     companion object {
         const val ANTIBANDING_OFF = 0
@@ -55,6 +58,9 @@ data class AppSettings(
                 sensorShdr = p.getBoolean("sensorShdr", false),
                 timerSeconds = p.getInt("timerSeconds", 0),
                 burstMode = p.getBoolean("burstMode", false),
+                haptics = p.getBoolean("haptics", true),
+                betterJpeg = p.getBoolean("betterJpeg", false),
+                ultraHdrJpeg = p.getBoolean("ultraHdrJpeg", false),
             )
         }
 
@@ -75,6 +81,9 @@ data class AppSettings(
                 .putBoolean("sensorShdr", s.sensorShdr)
                 .putInt("timerSeconds", s.timerSeconds)
                 .putBoolean("burstMode", s.burstMode)
+                .putBoolean("haptics", s.haptics)
+                .putBoolean("betterJpeg", s.betterJpeg)
+                .putBoolean("ultraHdrJpeg", s.ultraHdrJpeg)
                 .apply()
         }
     }

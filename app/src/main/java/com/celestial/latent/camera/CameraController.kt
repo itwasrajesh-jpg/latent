@@ -21,6 +21,7 @@ import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
 import android.media.ImageReader
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.provider.MediaStore
@@ -78,6 +79,11 @@ class CameraController(
     @Volatile var inSensorZoomJpeg = false
     @Volatile var dcgMode = false
     @Volatile var sensorShdr = false
+    @Volatile var betterJpeg = false
+    @Volatile var ultraHdrJpeg = false
+    private val MFNR_KEY = "org.codeaurora.qcamera3.sessionParameters.enableMFNR"
+    private val SNAPHDR_KEY = "org.codeaurora.qcamera3.sessionParameters.SnapshotHDRMode"
+    private val JPEGR_KEY = "com.xiaomi.sessionparams.jpegrEnable"
     private val ISZ_KEY = "org.codeaurora.qcamera3.sessionParameters.EnableInsensorZoom"
     private val DCG_KEY = "org.codeaurora.qcamera3.sessionParameters.EnableHDRDCGMode"
     private val SHDR_KEY = "org.codeaurora.qcamera3.sessionParameters.inSensorSHDRMode"
@@ -87,9 +93,12 @@ class CameraController(
         if (inSensorZoomJpeg) add(ISZ_KEY)
         if (dcgMode) add(DCG_KEY)
         if (sensorShdr) add(SHDR_KEY)
+        if (betterJpeg) { add(MFNR_KEY); add(SNAPHDR_KEY) }
+        if (ultraHdrJpeg) add(JPEGR_KEY)
         return out
     }
     @Volatile var onVendorEcho: (String) -> Unit = {}
+    @Volatile var onBurstFinished: () -> Unit = {}
     private lateinit var physChars: CameraCharacteristics
     private var rawSize = Size(4096, 3072)
 
@@ -387,6 +396,19 @@ class CameraController(
             applyControls(this)
             set(CaptureRequest.JPEG_ORIENTATION, physChars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90)
             set(CaptureRequest.JPEG_QUALITY, 100.toByte())
+            if (betterJpeg) {
+                // JPEG/YUV path only; RAW is never touched by these.
+                fun <T> hq(key: CaptureRequest.Key<T>, avail: CameraCharacteristics.Key<IntArray>, mode: Int) {
+                    @Suppress("UNCHECKED_CAST")
+                    if (physChars.get(avail)?.contains(mode) == true) set(key as CaptureRequest.Key<Int>, mode)
+                }
+                hq(CaptureRequest.NOISE_REDUCTION_MODE, CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES, CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY)
+                hq(CaptureRequest.EDGE_MODE, CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES, CameraMetadata.EDGE_MODE_HIGH_QUALITY)
+                hq(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES, CameraMetadata.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY)
+                hq(CaptureRequest.TONEMAP_MODE, CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES, CameraMetadata.TONEMAP_MODE_HIGH_QUALITY)
+                hq(CaptureRequest.SHADING_MODE, CameraCharacteristics.SHADING_AVAILABLE_MODES, CameraMetadata.SHADING_MODE_HIGH_QUALITY)
+                if (Build.VERSION.SDK_INT >= 28) hq(CaptureRequest.DISTORTION_CORRECTION_MODE, CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES, CameraMetadata.DISTORTION_CORRECTION_MODE_HIGH_QUALITY)
+            }
         }
     }
 
@@ -487,6 +509,7 @@ class CameraController(
                 saveTo(avgName) { DngWriter.write(it, meta, pixels) }
                 val wms = (System.nanoTime() - t) / 1_000_000
                 status("Burst: ${job.received}/${job.frames} frames (${job.failed} failed) · sensor span $sensorMs ms · total $wallMs ms · saved ${job.firstName} + $avgName (write $wms ms)")
+                onBurstFinished()
                 log("burst frame timestamps ms from first: " + job.tsList.joinToString { ((it - job.firstTs) / 1_000_000).toString() })
                 log("alignment shifts px (accepted tiles): " + job.shifts.joinToString(" ") + " · overall ${job.tilesAccepted}/${job.tilesTotal} tiles used")
             } catch (e: Exception) { status("burst save failed: ${e.message}"); Log.e("Latent", "burst", e) }
@@ -524,7 +547,7 @@ class CameraController(
 
     private fun fileBase(kind: String = "RAW"): String {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        return "LATENT_${stamp}_${lens.label.replace(".", "_")}_$kind"
+        return "LATENT_${stamp}_${lens.label.replace(".", "_")}x_$kind"
     }
 
     /** Nearest known base name within 100 ms of a timestamp (JPEG and RAW stamps can differ slightly). */
