@@ -80,6 +80,7 @@ fun CameraScreen(
     settings: AppSettings,
     onSettingsChange: (AppSettings) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenExtension: () -> Unit = {},
     onLensChanged: (Lens) -> Unit,
     onController: (CameraController) -> Unit = {},
     onVendorEcho: (String) -> Unit = {},
@@ -252,7 +253,7 @@ fun CameraScreen(
             if (controls.locked) Text("AE/AF LOCK", color = LatentColors.AmberInk, fontSize = 11.sp, letterSpacing = 1.sp,
                 modifier = Modifier.align(Alignment.TopCenter).padding(8.dp).clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).padding(horizontal = 10.dp, vertical = 4.dp))
             if (countdown > 0) Text("$countdown", color = LatentColors.TextBright, fontSize = 64.sp, modifier = Modifier.align(Alignment.Center))
-            Text("${lens.name.uppercase()} · ${lens.mm} MM" + (if (readout.afState.isNotEmpty()) " · AF ${readout.afState.uppercase()}" else ""),
+            Text((if (lens.mm >= 70) "TELE" else lens.name.uppercase()) + " · ${lens.mm} MM" + (if (readout.afState.isNotEmpty()) " · AF ${readout.afState.uppercase()}" else ""),
                 color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(12.dp))
             Text(if (controls.zoom == 2f) "×2 ON" else "", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp))
             // Lens row floating on the image: plain numbers, active one larger; ×2 multiplies the current lens.
@@ -287,7 +288,7 @@ fun CameraScreen(
                         Tile(if (settings.timerSeconds == 0) "Timer off" else "Timer ${settings.timerSeconds}s", settings.timerSeconds > 0, Modifier.weight(1f)) {
                             onSettingsChange(settings.copy(timerSeconds = when (settings.timerSeconds) { 0 -> 3; 3 -> 10; else -> 0 }))
                         }
-                        Tile("Burst 16", settings.burstMode, Modifier.weight(1f)) { onSettingsChange(settings.copy(burstMode = it)) }
+                        Tile("Portrait / Night", false, Modifier.weight(1f)) { drawerOpen = false; onOpenExtension() }
                         Tile("All settings", false, Modifier.weight(1f)) { drawerOpen = false; onOpenSettings() }
                     }
                 }
@@ -348,7 +349,7 @@ fun CameraScreen(
             }
         }
         Text(if (settings.burstMode) "BURST · HOLD FOR SINGLE" else "SINGLE · HOLD FOR BURST", color = LatentColors.Line, fontSize = 9.sp, letterSpacing = 1.5.sp,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }
 

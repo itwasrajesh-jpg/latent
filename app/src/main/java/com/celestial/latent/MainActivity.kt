@@ -103,7 +103,7 @@ private fun Root() {
     }
     // System back gesture: always one step up, never out of the app while inside a sub-screen.
     BackHandler(enabled = screen != "camera") {
-        screen = if (screen == "settings") "camera" else "settings"
+        screen = if (screen == "settings" || screen == "extension") "camera" else "settings"
     }
 
     when (screen) {
@@ -118,7 +118,7 @@ private fun Root() {
             onOpenExtension = { screen = "extension" },
             onBack = { screen = "camera" },
         )
-        "extension" -> if (android.os.Build.VERSION.SDK_INT >= 31) ExtensionScreen(onBack = { screen = "settings" }) else { screen = "settings" }
+        "extension" -> if (android.os.Build.VERSION.SDK_INT >= 31) ExtensionScreen(onBack = { screen = "camera" }) else { screen = "camera" }
         "logs" -> LogScreen(onBack = { screen = "settings" })
         "probe" -> ProbeScreen(settings = settings, onBack = { screen = "settings" })
         "vendor" -> VendorScreen(
@@ -132,6 +132,7 @@ private fun Root() {
             settings = settings,
             onSettingsChange = { s -> settings = s; AppSettings.save(context, s) },
             onOpenSettings = { screen = "settings" },
+            onOpenExtension = { screen = "extension" },
             onLensChanged = { l -> if (settings.rememberLens) { settings = settings.copy(defaultLensId = l.physicalId); AppSettings.save(context, settings) } },
             onController = { c -> controllerRef = c },
             onVendorEcho = { e -> vendorEcho = e },

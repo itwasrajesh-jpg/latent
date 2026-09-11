@@ -74,6 +74,13 @@ class ExtensionCamera(private val context: android.content.Context, private val 
     private var previewSurface: Surface? = null
     var extension = CameraExtensionCharacteristics.EXTENSION_BOKEH
     private val cameraId = "0"
+    private var surfaceTexture: SurfaceTexture? = null
+    @Volatile var zoom = 1f
+    var onZoomSupport: (Boolean) -> Unit = {}
+
+    private fun zoomSupported(): Boolean = Build.VERSION.SDK_INT >= 33 && runCatching {
+        cm.getCameraExtensionCharacteristics(cameraId).getAvailableCaptureRequestKeys(extension).any { it.name == CaptureRequest.CONTROL_ZOOM_RATIO.name }
+    }.getOrDefault(false)
 
     fun previewSize(): android.util.Size {
         if (Build.VERSION.SDK_INT < 31) return android.util.Size(1440, 1080)
@@ -82,11 +89,23 @@ class ExtensionCamera(private val context: android.content.Context, private val 
         return sizes.filter { it.width * 3 == it.height * 4 && it.width <= 1920 }.maxByOrNull { it.width } ?: sizes.firstOrNull() ?: android.util.Size(1440, 1080)
     }
 
+    fun attach(st: SurfaceTexture) { surfaceTexture = st; openOnTexture() }
+
+    /** Sizes the preview for the current extension, then opens. */
+    private fun openOnTexture() {
+        val st = surfaceTexture ?: return
+        val size = previewSize()
+        st.setDefaultBufferSize(size.width, size.height)
+        open(Surface(st))
+    }
+
     @SuppressLint("MissingPermission")
     fun open(surface: Surface) = handler.post {
         if (Build.VERSION.SDK_INT < 31) { onStatus("Extensions need Android 12+"); return@post }
         closeInternal()
+        Thread.sleep(250) // let the previous extension session fully release before the next one
         previewSurface = surface
+        onZoomSupport(zoomSupported())
         try {
             val ec = cm.getCameraExtensionCharacteristics(cameraId)
             if (extension !in ec.supportedExtensions) { onStatus("Extension not supported: $extension"); return@post }
@@ -119,7 +138,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
                             override fun onConfigured(s: CameraExtensionSession) {
                                 session = s
                                 try {
-                                    val req = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(surface) }
+                                    val req = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(surface); if (zoom != 1f && zoomSupported()) set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom) }
                                     s.setRepeatingRequest(req.build(), executor, object : CameraExtensionSession.ExtensionCaptureCallback() {})
                                     onStatus("Ready · ${if (extension == CameraExtensionCharacteristics.EXTENSION_BOKEH) "Portrait" else "Night"} · tap the shutter")
                                 } catch (e: Exception) { onStatus("preview: ${e.message}") }
@@ -137,7 +156,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
     fun capture() = handler.post {
         val s = session ?: return@post; val dev = device ?: return@post; val r = reader ?: return@post
         try {
-            val req = dev.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply { addTarget(r.surface); set(CaptureRequest.JPEG_ORIENTATION, 90); set(CaptureRequest.JPEG_QUALITY, 100.toByte()) }
+            val req = dev.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply { addTarget(r.surface); set(CaptureRequest.JPEG_ORIENTATION, 90); set(CaptureRequest.JPEG_QUALITY, 100.toByte()); if (zoom != 1f && zoomSupported()) set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom) }
             s.capture(req.build(), executor, object : CameraExtensionSession.ExtensionCaptureCallback() {
                 override fun onCaptureFailed(sess: CameraExtensionSession, request: CaptureRequest) { onStatus("capture failed") }
                 override fun onCaptureProcessStarted(sess: CameraExtensionSession, request: CaptureRequest) { onStatus("Processing…") }
@@ -145,7 +164,12 @@ class ExtensionCamera(private val context: android.content.Context, private val 
         } catch (e: Exception) { onStatus("capture: ${e.message}") }
     }
 
-    fun switchTo(ext: Int) { extension = ext; previewSurface?.let { open(it) } }
+    fun switchTo(ext: Int) { extension = ext; openOnTexture() }
+    fun setZoom(z: Float) = handler.post {
+        zoom = z
+        val s = session ?: return@post; val dev = device ?: return@post; val surf = previewSurface ?: return@post
+        try { s.setRepeatingRequest(dev.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(surf); if (zoomSupported()) set(CaptureRequest.CONTROL_ZOOM_RATIO, z) }.build(), executor, object : CameraExtensionSession.ExtensionCaptureCallback() {}) } catch (e: Exception) { onStatus("zoom: ${e.message}") }
+    }
     fun close() = handler.post { closeInternal() }
     private fun closeInternal() {
         try { session?.close() } catch (_: Exception) {}; session = null
@@ -161,7 +185,9 @@ fun ExtensionScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var status by remember { mutableStateOf("Starting…") }
     var mode by remember { mutableStateOf(CameraExtensionCharacteristics.EXTENSION_BOKEH) }
-    val cam = remember { ExtensionCamera(context) { s -> status = s } }
+    var zoomOk by remember { mutableStateOf(false) }
+    var zoom by remember { mutableStateOf(1f) }
+    val cam = remember { ExtensionCamera(context) { s -> status = s }.also { it.onZoomSupport = { ok -> zoomOk = ok } } }
     DisposableEffect(Unit) { onDispose { cam.destroy() } }
 
     Column(Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().navigationBarsPadding()) {
@@ -180,9 +206,7 @@ fun ExtensionScreen(onBack: () -> Unit) {
             AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
                 TextureView(ctx).apply {
                     surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                            val size = cam.previewSize(); st.setDefaultBufferSize(size.width, size.height); cam.open(Surface(st))
-                        }
+                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) { cam.attach(st) }
                         override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
                         override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { cam.close(); return true }
                         override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
@@ -190,6 +214,13 @@ fun ExtensionScreen(onBack: () -> Unit) {
                 }
             })
             Text("XIAOMI " + (if (mode == CameraExtensionCharacteristics.EXTENSION_BOKEH) "PORTRAIT" else "NIGHT") + " · JPEG ONLY", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
+            if (zoomOk) Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp)) {
+                listOf(0.6f, 1f, 2f, 3f, 4.3f).forEach { z ->
+                    val on = zoom == z
+                    Text(if (on) "${z}×".replace(".0×", "×") else "$z".removeSuffix(".0"), color = if (on) LatentColors.TextBright else LatentColors.Text, fontSize = if (on) 15.sp else 12.sp,
+                        modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); zoom = z; cam.setZoom(z) }).padding(horizontal = 10.dp, vertical = 6.dp))
+                }
+            } else Text("LENS: CHOSEN BY XIAOMI", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(12.dp))
         }
         Spacer(Modifier.height(12.dp))
         Text(status, color = LatentColors.Text, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
