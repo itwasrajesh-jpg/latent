@@ -231,7 +231,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
     }
 
     fun switchTo(ext: Int) { extension = ext; openOnTexture() }
-    fun setZoom(z: Float) { zoom = z; refresh() }
+    fun applyZoom(z: Float) { zoom = z; refresh() }
     fun close() = handler.post { closeInternal() }
     private fun closeInternal() {
         try { session?.close() } catch (_: Exception) {}; session = null
@@ -287,7 +287,7 @@ fun ExtensionScreen(onBack: () -> Unit) {
                 listOf(0.6f, 1f, 2f, 3f, 4.3f).forEach { z ->
                     val on = zoom == z
                     Text(if (on) "${z}×".replace(".0×", "×") else "$z".removeSuffix(".0"), color = if (on) LatentColors.TextBright else LatentColors.Text, fontSize = if (on) 15.sp else 12.sp,
-                        modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); zoom = z; cam.setZoom(z) }).padding(horizontal = 10.dp, vertical = 6.dp))
+                        modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); zoom = z; cam.applyZoom(z) }).padding(horizontal = 10.dp, vertical = 6.dp))
                 }
                 if (caps?.isz == true) Text(if (iszOn) "ISZ" else "isz", color = if (iszOn) LatentColors.AmberInk else LatentColors.Amber, fontSize = 11.sp,
                     modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(999.dp)).background(if (iszOn) LatentColors.Amber else androidx.compose.ui.graphics.Color.Transparent).border(0.5.dp, LatentColors.Amber, RoundedCornerShape(999.dp))
