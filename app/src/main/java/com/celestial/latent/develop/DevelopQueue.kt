@@ -14,6 +14,28 @@ object DevelopQueue {
 
     data class Job(val source: Uri, val recipe: Recipe, val isRaw: Boolean)
 
+    /**
+     * Full-resolution develop, run on the same single thread as auto-develop so two heavy
+     * engine runs can never overlap — overlapping them makes both crawl.
+     */
+    fun submitFull(context: Context, source: Uri, isRaw: Boolean, recipe: Recipe,
+                   onStatus: (String) -> Unit, onDone: (Uri?) -> Unit) {
+        pending.incrementAndGet(); onChanged()
+        onStatus("queued")
+        pool.execute {
+            val app = context.applicationContext
+            var out: Uri? = null
+            try {
+                onStatus("starting")
+                out = Develop.developFull(app, source, isRaw, recipe) { m -> onStatus(m) }
+            } catch (t: Throwable) {
+                Log.e("Latent", "full develop failed", t); onStatus("failed: ${t.message}")
+            } finally {
+                pending.decrementAndGet(); onChanged(); onDone(out)
+            }
+        }
+    }
+
     private val pool = Executors.newSingleThreadExecutor { r -> Thread(r, "latent-develop").apply { priority = Thread.MIN_PRIORITY } }
 
     /**
@@ -43,7 +65,8 @@ object DevelopQueue {
     fun submit(context: Context, job: Job) {
         pending.incrementAndGet(); onChanged()
         pool.execute {
-            val holdsLane = acquireLane()
+            // Same single thread as full-size work, so the lane is only about the darkroom preview.
+            val holdsLane = acquireLane(120)
             try {
                 val out = if (job.isRaw) Develop.developDng(context.applicationContext, job.source, job.recipe)
                           else Develop.developJpeg(context.applicationContext, job.source, job.recipe)

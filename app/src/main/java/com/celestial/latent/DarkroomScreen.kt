@@ -89,11 +89,14 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
     var fullRunning by remember { mutableStateOf(false) }
     var previewIsPartial by remember { mutableStateOf(false) }
     var gpuTest by remember { mutableStateOf("") }
+    var fullStarted by remember { mutableStateOf(0L) }
+    var elapsed by remember { mutableStateOf(0) }
     var tab by remember { mutableStateOf("film") }
     var sheet by remember { mutableStateOf(0) }   // 0 peek, 1 half, 2 full
     var saveName by remember { mutableStateOf("") }
 
     fun render(fast: Boolean) {
+        if (fullRunning) return                      // never compete with a full-size develop
         if (rendering) { pendingAt = System.currentTimeMillis(); return }
         rendering = true
         // While a control moves: smaller, centred, and without the costly spatial stages —
@@ -105,7 +108,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
             val q = com.celestial.latent.develop.DevelopQueue
             val holdsLane = if (q.engineLane.tryAcquire()) true else {
                 status = "waiting for the background develop…"
-                q.acquireLane(20)
+                q.engineLane.acquire(); true          // wait for our turn; never run two engines at once
             }
             var cropped: Develop.Source? = null
             try {
@@ -130,6 +133,11 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
     }
 
     // First render, then re-render shortly after the last control change.
+    LaunchedEffect(fullRunning) {
+        while (fullRunning) { elapsed = ((System.currentTimeMillis() - fullStarted) / 1000).toInt(); delay(500) }
+        elapsed = 0
+    }
+
     // If this capture was already developed, show that straight away instead of a blank wait.
     LaunchedEffect(source) {
         if (preview == null) {
@@ -182,7 +190,12 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
         }) {
             val shown = if (comparing) (original ?: preview) else preview
             shown?.let { Image(it.asImageBitmap(), contentDescription = "Developed", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
-            if (rendering) Text("DEVELOPING…", color = LatentColors.Amber, fontSize = 10.sp, letterSpacing = 2.sp, modifier = Modifier.align(Alignment.TopEnd).padding(10.dp))
+            if (fullRunning) Column(Modifier.align(Alignment.Center).padding(20.dp)) {
+                Text("FULL SIZE · ${elapsed}s", color = LatentColors.Amber, fontSize = 12.sp, letterSpacing = 2.sp)
+                Text(status.removePrefix("full size: "), color = LatentColors.Text, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+                Text("12.5 MP takes a while — the engine simulates every pixel.", color = LatentColors.TextDim, fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
+            }
+            if (rendering && !fullRunning) Text("DEVELOPING…", color = LatentColors.Amber, fontSize = 10.sp, letterSpacing = 2.sp, modifier = Modifier.align(Alignment.TopEnd).padding(10.dp))
             if (previewIsPartial && !rendering) Text("QUICK PASS · CENTRE ONLY", color = Color(0x99FFFFFF), fontSize = 9.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(10.dp))
             if (!rendering && preview == null) Text(if (status.isEmpty()) "no preview yet" else status, color = LatentColors.Text, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp))
             Text(if (comparing) "ORIGINAL" else (Develop.FILMS.firstOrNull { it.first == recipe.film }?.second?.uppercase() ?: recipe.film),
@@ -372,24 +385,23 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
 
         Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(if (isRaw) "FROM RAW" else "FILM OVER JPEG", color = LatentColors.Line, fontSize = 9.sp, letterSpacing = 1.5.sp)
-            Text(if (fullRunning) "Developing…" else "Develop full size", color = LatentColors.AmberInk, fontSize = 12.sp,
+            Text(if (fullRunning) "Developing… ${elapsed}s" else "Develop full size", color = LatentColors.AmberInk, fontSize = 12.sp,
                 modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).combinedClickable(onClick = {
                     if (fullRunning) return@combinedClickable
                     Haptics.click(context)
-                    fullRunning = true
-                    status = "full size: starting…"
-                    val r = recipe
-                    Thread {
-                        val q = com.celestial.latent.develop.DevelopQueue
-                        val holds = q.acquireLane(60)
-                        try {
-                            val out = Develop.developFull(context, source, isRaw, r) { m -> status = "full size: $m" }
-                            status = "saved to DCIM/Latent"
-                            val b = runCatching { context.contentResolver.loadThumbnail(out, android.util.Size(1600, 1600), null) }.getOrNull()
-                            if (b != null) preview = b
-                        } catch (t: Throwable) { status = "full size failed: ${t.message}" }
-                        finally { if (holds) q.engineLane.release(); fullRunning = false }
-                    }.start()
+                    fullRunning = true; fullStarted = System.currentTimeMillis(); status = "full size: queued"
+                    com.celestial.latent.develop.DevelopQueue.submitFull(
+                        context, source, isRaw, recipe,
+                        onStatus = { m -> status = "full size: $m" },
+                        onDone = { out ->
+                            fullRunning = false
+                            if (out != null) {
+                                status = "saved to DCIM/Latent"
+                                val b = runCatching { context.contentResolver.loadThumbnail(out, android.util.Size(1600, 1600), null) }.getOrNull()
+                                if (b != null) { preview = b; previewIsPartial = false }
+                            }
+                        },
+                    )
                 }).padding(horizontal = 16.dp, vertical = 9.dp))
         }
     }
