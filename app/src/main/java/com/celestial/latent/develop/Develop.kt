@@ -58,7 +58,7 @@ object Develop {
         val jpeg = image.use { img ->
             SpektraEngine.fromAssets(context.assets).use { engine ->
                 val params = SpektraParams(filmProfile = film, printProfile = paper, camera = CameraParams(autoExposure = true))
-                engine.simulate(img, params).use { result -> toJpeg(result.data, result.width, result.height) }
+                engine.simulate(img, params).use { result -> toJpeg(result.data, result.width, result.height, result.colorSpace) }
             }
         }
         val devMs = (System.nanoTime() - t1) / 1_000_000
@@ -66,22 +66,50 @@ object Develop {
         return save(context, jpeg, baseNameOf(context, dng) + "_" + film.substringAfterLast('_') + ".jpg")
     }
 
-    /** Engine output is 8-bit RGB in the chosen output space; wrap it as a Bitmap and encode. */
-    private fun toJpeg(data: ByteBuffer, w: Int, h: Int): ByteArray {
-        val buf = data.order(ByteOrder.nativeOrder())
-        val pixels = IntArray(w * h)
-        buf.rewind()
-        for (i in 0 until w * h) {
-            val r = buf.get().toInt() and 0xFF
-            val g = buf.get().toInt() and 0xFF
-            val b = buf.get().toInt() and 0xFF
-            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+    /**
+     * The engine returns display-referred FLOAT RGB (three floats per pixel, 0..1) in its output
+     * colour space — not bytes. Clamp, quantise to 8 bit, and tag the bitmap with that space so
+     * the system colour-manages it and embeds the right profile on export.
+     */
+    private fun toJpeg(data: ByteBuffer, w: Int, h: Int, colorSpace: com.spectrafilm.engine.ColorSpace): ByteArray {
+        val f = data.order(ByteOrder.nativeOrder()).asFloatBuffer()
+        val bmp = taggedBitmap(w, h, colorSpace)
+        val bandRows = (1024 * 1024 / w).coerceIn(1, h)
+        val strip = IntArray(w * bandRows)
+        var y = 0
+        while (y < h) {
+            val rows = minOf(bandRows, h - y)
+            var k = 0
+            var i = y * w * 3
+            repeat(w * rows) {
+                val r = (f.get(i).coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+                val g = (f.get(i + 1).coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+                val b = (f.get(i + 2).coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+                strip[k++] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                i += 3
+            }
+            bmp.setPixels(strip, 0, w, 0, y, w, rows)
+            y += rows
         }
-        val bmp = android.graphics.Bitmap.createBitmap(pixels, w, h, android.graphics.Bitmap.Config.ARGB_8888)
         val out = ByteArrayOutputStream()
         bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, out)
         bmp.recycle()
         return out.toByteArray()
+    }
+
+    /** Bitmap tagged with the engine's output colour space, falling back to sRGB. */
+    private fun taggedBitmap(w: Int, h: Int, cs: com.spectrafilm.engine.ColorSpace): android.graphics.Bitmap {
+        val named = when (cs) {
+            com.spectrafilm.engine.ColorSpace.SRGB -> android.graphics.ColorSpace.Named.SRGB
+            com.spectrafilm.engine.ColorSpace.ADOBE_RGB -> android.graphics.ColorSpace.Named.ADOBE_RGB
+            com.spectrafilm.engine.ColorSpace.PROPHOTO -> android.graphics.ColorSpace.Named.PRO_PHOTO_RGB
+            com.spectrafilm.engine.ColorSpace.REC2020 -> android.graphics.ColorSpace.Named.BT2020
+            com.spectrafilm.engine.ColorSpace.LINEAR_SRGB -> android.graphics.ColorSpace.Named.LINEAR_SRGB
+            else -> android.graphics.ColorSpace.Named.SRGB
+        }
+        return runCatching {
+            android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888, false, android.graphics.ColorSpace.get(named))
+        }.getOrElse { android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888) }
     }
 
     private fun baseNameOf(context: Context, uri: Uri): String {
