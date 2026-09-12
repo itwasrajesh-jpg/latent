@@ -156,12 +156,17 @@ class CameraController(
                 rawReader = ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 6).also {
                     it.setOnImageAvailableListener({ r -> onRawImage(r) }, handler)
                 }
-                jpegReader = if (saveJpeg) {
-                    val jpegSize = map.getOutputSizes(ImageFormat.JPEG).maxByOrNull { it.width.toLong() * it.height } ?: rawSize
-                    ImageReader.newInstance(jpegSize.width, jpegSize.height, ImageFormat.JPEG, 4).also {
-                        it.setOnImageAvailableListener({ r -> onJpegImage(r) }, handler)
-                    }
-                } else null
+                jpegIsUltraHdr = ultraHdrJpeg && Build.VERSION.SDK_INT >= 34 &&
+                map.outputFormats.contains(FORMAT_JPEG_R) && (map.getOutputSizes(FORMAT_JPEG_R)?.isNotEmpty() == true)
+            jpegReader = if (saveJpeg) {
+                val fmt = if (jpegIsUltraHdr) FORMAT_JPEG_R else ImageFormat.JPEG
+                val jpegSize = map.getOutputSizes(fmt)?.maxByOrNull { it.width.toLong() * it.height } ?: rawSize
+                log("JPEG stream: " + (if (jpegIsUltraHdr) "JPEG_R (Ultra HDR)" else "JPEG") + " ${jpegSize.width}x${jpegSize.height}" +
+                    (if (ultraHdrJpeg && !jpegIsUltraHdr) " · Ultra HDR requested but JPEG_R not offered here" else ""))
+                ImageReader.newInstance(jpegSize.width, jpegSize.height, fmt, 4).also {
+                    it.setOnImageAvailableListener({ r -> onJpegImage(r) }, handler)
+                }
+            } else null
                 oisAvailable = physChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true
                 status("Opening ${lens.name} (${lens.label}) · RAW ${rawSize.width}x${rawSize.height}")
                 val idToOpen = if (directOpen) lens.physicalId else logicalId
