@@ -22,6 +22,16 @@ object DevelopQueue {
      * this while it renders a preview; background developing waits its turn.
      */
     val engineLane = java.util.concurrent.Semaphore(1, true)
+
+    /**
+     * Waits for the lane, but never forever: a lost permit must not stop developing for good.
+     * Returns true if it was acquired (and so must be released).
+     */
+    fun acquireLane(waitSeconds: Long = 45): Boolean = try {
+        val got = engineLane.tryAcquire(waitSeconds, java.util.concurrent.TimeUnit.SECONDS)
+        if (!got) android.util.Log.w("Latent", "engine lane not free after ${waitSeconds}s; running anyway")
+        got
+    } catch (t: InterruptedException) { false }
     private val pending = AtomicInteger(0)
 
     /** Number of photos waiting or being developed right now. */
@@ -33,7 +43,7 @@ object DevelopQueue {
     fun submit(context: Context, job: Job) {
         pending.incrementAndGet(); onChanged()
         pool.execute {
-            engineLane.acquire()
+            val holdsLane = acquireLane()
             try {
                 val out = if (job.isRaw) Develop.developDng(context.applicationContext, job.source, job.recipe)
                           else Develop.developJpeg(context.applicationContext, job.source, job.recipe)
@@ -41,7 +51,7 @@ object DevelopQueue {
             } catch (t: Throwable) {
                 Log.e("Latent", "develop failed for ${job.source}", t)
             } finally {
-                engineLane.release()
+                if (holdsLane) engineLane.release()
                 pending.decrementAndGet(); onChanged()
             }
         }

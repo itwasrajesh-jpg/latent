@@ -28,14 +28,53 @@ object Develop {
         override fun close() = image.close()
     }
 
-    /** Decode a RAW once, capped to [maxEdge] (0 = full size). */
-    fun openRaw(context: Context, dng: Uri, maxEdge: Int = 0): Source {
+    /**
+     * Decode a RAW once, capped to [maxEdge] (0 = full size). Some DNGs ignore the decoder's
+     * own cap, so the result is box-downsampled here when it comes back too large — otherwise
+     * every later render silently does full-resolution work.
+     */
+    fun openRaw(context: Context, dng: Uri, maxEdge: Int = 0, log: (String) -> Unit = {}): Source {
+        val t0 = System.nanoTime()
         val decoded = context.contentResolver.openFileDescriptor(dng, "r")?.use {
             RawDecoder.decodeToLinear(it.fd, RawDecoder.Settings(maxLongEdge = maxEdge))
         } ?: error("could not open $dng")
-        val img = LinearImage(decoded.data, decoded.width, decoded.height, colorSpace = decoded.colorSpace,
-            onClose = { RawDecoder.freeOffHeap(it) })
-        return Source(img, decoded.width, decoded.height)
+        val w = decoded.width; val h = decoded.height
+        Log.i("Latent", "decode: ${w}x$h in ${(System.nanoTime() - t0) / 1_000_000} ms (asked for max $maxEdge)")
+        log("decoded ${w}×$h")
+        val longest = maxOf(w, h)
+        if (maxEdge <= 0 || longest <= maxEdge) {
+            return Source(LinearImage(decoded.data, w, h, colorSpace = decoded.colorSpace, onClose = { RawDecoder.freeOffHeap(it) }), w, h)
+        }
+        // The cap was ignored: shrink it ourselves, then free the big native buffer.
+        var step = 1
+        while (longest / step > maxEdge) step++
+        val outW = (w + step - 1) / step; val outH = (h + step - 1) / step
+        Log.i("Latent", "decoder ignored the cap; downsampling 1/$step to ${outW}x$outH")
+        log("downsampling to ${outW}×$outH")
+        val src = decoded.data.order(ByteOrder.nativeOrder()).asFloatBuffer()
+        val out = ByteBuffer.allocateDirect(outW * outH * 3 * 4).order(ByteOrder.nativeOrder())
+        val of = out.asFloatBuffer()
+        val acc = FloatArray(3)
+        for (y in 0 until outH) {
+            for (x in 0 until outW) {
+                acc[0] = 0f; acc[1] = 0f; acc[2] = 0f
+                var n = 0
+                for (dy in 0 until step) {
+                    val sy = y * step + dy
+                    if (sy >= h) break
+                    for (dx in 0 until step) {
+                        val sx = x * step + dx
+                        if (sx >= w) break
+                        val i = (sy * w + sx) * 3
+                        acc[0] += src.get(i); acc[1] += src.get(i + 1); acc[2] += src.get(i + 2); n++
+                    }
+                }
+                val inv = if (n > 0) 1f / n else 0f
+                of.put(acc[0] * inv); of.put(acc[1] * inv); of.put(acc[2] * inv)
+            }
+        }
+        RawDecoder.freeOffHeap(decoded.data)
+        return Source(LinearImage(out, outW, outH, colorSpace = decoded.colorSpace), outW, outH)
     }
 
     /** Decode an already-processed image once, linearised for the engine. */
@@ -65,14 +104,18 @@ object Develop {
      * Render an already-decoded source. [preview] uses the engine's own downscaled fast path,
      * which is also the only path that honours the GPU preview flag.
      */
+    @Volatile var cancelRequested = false
+
     fun render(context: Context, source: Source, recipe: Recipe, preview: Boolean, log: (String) -> Unit = {}): Pair<ByteArray, Pair<Int, Int>> {
         val t = System.nanoTime()
+        Log.i("Latent", "render start: source ${source.width}x${source.height}, preview=$preview, cap=${recipe.previewMaxSize}, film=${recipe.film}, gpu=${recipe.gpuPreview}/${recipe.gpuExport}")
         var dims = 0 to 0
         val params = sanitised(recipe).toParams()
         val jpeg = SpektraEngine.fromAssets(context.assets).use { engine ->
             val result = if (preview) engine.simulatePreview(source.image, params) else engine.simulate(source.image, params)
             result.use { r -> dims = r.width to r.height; toJpeg(r.data, r.width, r.height, r.colorSpace) }
         }
+        Log.i("Latent", "render done: ${dims.first}x${dims.second} in ${(System.nanoTime() - t) / 1_000_000} ms")
         log((if (preview) "preview" else "full") + " ${dims.first}×${dims.second} in ${(System.nanoTime() - t) / 1_000_000} ms" +
             (if (recipe.gpuPreview || recipe.gpuExport) " · GPU requested" else ""))
         return jpeg to dims

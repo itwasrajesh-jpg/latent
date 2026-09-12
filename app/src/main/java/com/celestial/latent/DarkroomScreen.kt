@@ -56,9 +56,9 @@ import com.celestial.latent.develop.Recipes
 import com.celestial.latent.ui.LatentColors
 import kotlinx.coroutines.delay
 
-private const val COARSE_EDGE = 500     // while a control is moving
-private const val FINE_EDGE = 900       // once it settles
-private const val DECODE_EDGE = 1600    // the RAW is decoded once at this size for the darkroom
+private const val COARSE_EDGE = 420     // while a control is moving
+private const val FINE_EDGE = 800       // once it settles
+private const val DECODE_EDGE = 1200    // the RAW is decoded once at this size for the darkroom
 
 private val TABS = listOf(
     "film" to "FILM", "halation" to "HALATION", "grain" to "GRAIN", "diffusion" to "DIFFUSION",
@@ -95,18 +95,22 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
         rendering = true
         val r = recipe.copy(previewMaxSize = if (fast) COARSE_EDGE else FINE_EDGE)
         Thread {
-            val lane = com.celestial.latent.develop.DevelopQueue.engineLane
-            if (!lane.tryAcquire()) { status = "waiting for the background develop to finish…"; lane.acquire() }
+            val q = com.celestial.latent.develop.DevelopQueue
+            val holdsLane = if (q.engineLane.tryAcquire()) true else {
+                status = "waiting for the background develop…"
+                q.acquireLane(20)
+            }
             try {
                 // Decode once; every later edit reuses it.
                 if (src == null) {
                     status = "decoding…"
-                    src = if (isRaw) Develop.openRaw(context, source, DECODE_EDGE) else Develop.openImage(context, source, DECODE_EDGE)
+                    src = if (isRaw) Develop.openRaw(context, source, DECODE_EDGE) { m -> status = m } else Develop.openImage(context, source, DECODE_EDGE)
+                    status = "decoded ${src!!.width}×${src!!.height}"
                 }
                 val (bytes, dims) = Develop.render(context, src!!, r, preview = true) { m -> status = m }
                 preview = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             } catch (t: Throwable) { status = "failed: ${t.message}" }
-            finally { lane.release() }
+            finally { if (holdsLane) q.engineLane.release() }
             rendering = false
             if (pendingAt > 0) { pendingAt = 0; render(fast) }
         }.start()
@@ -330,11 +334,11 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                     val r = recipe
                     Thread {
                         try {
-                            val lane = com.celestial.latent.develop.DevelopQueue.engineLane
-                            lane.acquire()
+                            val q = com.celestial.latent.develop.DevelopQueue
+                            val holds = q.acquireLane(60)
                             val out = try {
                                 if (isRaw) Develop.developDng(context, source, r) else Develop.developJpeg(context, source, r)
-                            } finally { lane.release() }
+                            } finally { if (holds) q.engineLane.release() }
                             status = "saved"
                             runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).apply { setDataAndType(out, "image/jpeg"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }) }
                         } catch (t: Throwable) { status = "failed: ${t.message}" }
