@@ -81,6 +81,9 @@ class CameraController(
     @Volatile var sensorShdr = false
     @Volatile var betterJpeg = false
     @Volatile var ultraHdrJpeg = false
+    private var jpegIsUltraHdr = false
+    /** Android's JPEG_R format (Ultra HDR, base JPEG + gain map). Constant kept literal for older compile targets. */
+    private val FORMAT_JPEG_R = 4101
     private val MFNR_KEY = "org.codeaurora.qcamera3.sessionParameters.enableMFNR"
     private val SNAPHDR_KEY = "org.codeaurora.qcamera3.sessionParameters.SnapshotHDRMode"
     private val JPEGR_KEY = "com.xiaomi.sessionparams.jpegrEnable"
@@ -94,7 +97,7 @@ class CameraController(
         if (dcgMode) add(DCG_KEY)
         if (sensorShdr) add(SHDR_KEY)
         if (betterJpeg) { add(MFNR_KEY); add(SNAPHDR_KEY) }
-        if (ultraHdrJpeg) add(JPEGR_KEY)
+        if (ultraHdrJpeg && !jpegIsUltraHdr) add(JPEGR_KEY) // vendor hint only when the standard format is unavailable
         return out
     }
     @Volatile var onVendorEcho: (String) -> Unit = {}

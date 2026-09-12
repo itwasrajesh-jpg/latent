@@ -145,10 +145,19 @@ object CameraReport {
                 sb.appendLine("    RAW largest: stall=${stall}ns minFrame=${minFrame}ns")
             }
         }
+        // Every output format the driver offers, so we can see if JPEG_R (Ultra HDR) is among them.
+        val fmtNames = mapOf(
+            ImageFormat.RAW_SENSOR to "RAW_SENSOR", ImageFormat.RAW10 to "RAW10", ImageFormat.RAW12 to "RAW12", ImageFormat.RAW_PRIVATE to "RAW_PRIVATE",
+            ImageFormat.JPEG to "JPEG", 4101 to "JPEG_R (Ultra HDR)", ImageFormat.YUV_420_888 to "YUV_420_888", ImageFormat.PRIVATE to "PRIVATE",
+            ImageFormat.YCBCR_P010 to "YCBCR_P010", ImageFormat.HEIC to "HEIC", ImageFormat.DEPTH16 to "DEPTH16", ImageFormat.DEPTH_JPEG to "DEPTH_JPEG",
+        )
+        val formats = map.outputFormats
+        sb.appendLine("  output formats: " + formats.joinToString { f -> fmtNames[f] ?: "0x%x".format(f) })
         sizes(ImageFormat.RAW_SENSOR, "RAW_SENSOR")
         sizes(ImageFormat.RAW10, "RAW10")
         sizes(ImageFormat.RAW12, "RAW12")
         sizes(ImageFormat.JPEG, "JPEG")
+        if (Build.VERSION.SDK_INT >= 34) sizes(4101, "JPEG_R (Ultra HDR)")
         sizes(ImageFormat.YUV_420_888, "YUV_420_888")
         sizes(ImageFormat.PRIVATE, "PRIVATE(preview)")
         if (Build.VERSION.SDK_INT >= 33) {

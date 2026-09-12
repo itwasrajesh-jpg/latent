@@ -60,7 +60,7 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
         ToggleRow("Better JPEG", "Asks the driver for multi-frame noise reduction, snapshot HDR and high-quality post-processing on the JPEG. RAW is unchanged. Turns on RAW + JPEG.", settings.betterJpeg) {
             onChange(settings.copy(betterJpeg = it, saveJpeg = if (it) true else settings.saveJpeg))
         }
-        ToggleRow("Ultra HDR JPEG", "Asks for a gain-map JPEG (brighter highlights on HDR screens). Experimental.", settings.ultraHdrJpeg) { onChange(settings.copy(ultraHdrJpeg = it)) }
+        ToggleRow("Ultra HDR JPEG", "Saves the JPEG in Android's JPEG_R format (base image + gain map) where the camera offers it, so highlights glow on HDR screens. The log says which format the stream used.", settings.ultraHdrJpeg) { onChange(settings.copy(ultraHdrJpeg = it, saveJpeg = if (it) true else settings.saveJpeg)) }
         OptionRow(
             title = "Format",
             subtitle = "RAW is always saved. The JPEG is the camera driver's own processed copy, handy for sharing; it is not the film-developed result.",
