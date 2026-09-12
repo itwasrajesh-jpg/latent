@@ -162,17 +162,13 @@ fun CameraScreen(
     }
     LaunchedEffect(settings.antibanding) { controller.setAntibanding(settings.antibanding) }
     // Any of these changes the streams or the session tags: push them, then let the controller rebuild if needed.
-    LaunchedEffect(settings.cameraPath, settings.opmode, settings.vendorTags, settings.saveJpeg, settings.inSensorZoomJpeg,
-        settings.dcgMode, settings.sensorShdr, settings.betterJpeg, settings.ultraHdrJpeg) {
+    LaunchedEffect(settings.cameraPath, settings.opmode, settings.vendorTags, settings.saveJpeg, settings.inSensorZoomJpeg, settings.teleZoomDirect) {
         controller.cameraPath = settings.cameraPath
         controller.opmode = settings.opmode
         controller.vendorTags = settings.vendorTags.map { CameraController.VendorTagSpec(it.name, it.scope, it.type, it.value) }
         controller.saveJpeg = settings.saveJpeg
         controller.inSensorZoomJpeg = settings.inSensorZoomJpeg
-        controller.dcgMode = settings.dcgMode
-        controller.sensorShdr = settings.sensorShdr
-        controller.betterJpeg = settings.betterJpeg
-        controller.ultraHdrJpeg = settings.ultraHdrJpeg
+        controller.teleZoomDirect = settings.teleZoomDirect
         controller.syncSession()
     }
     LaunchedEffect(Unit) { controller.onVendorEcho = onVendorEcho; controller.onBurstFinished = { Haptics.click(context) }; onController(controller) }
@@ -251,10 +247,9 @@ fun CameraScreen(
                 onDismiss = { focusTap = null },
             )
             // Quiet captions overlaid on the image.
-            Text(if (settings.saveJpeg || settings.ultraHdrJpeg || settings.betterJpeg) "RAW + JPG · 12.5M" else "RAW · 12.5M", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
+            Text(if (settings.saveJpeg) "RAW + JPG · 12.5M" else "RAW · 12.5M", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
             val modes = listOfNotNull(
-                if (settings.inSensorZoomJpeg) "ISZ" else null, if (settings.dcgMode) "DCG" else null, if (settings.sensorShdr) "SHDR" else null,
-                if (settings.betterJpeg) "JPG+" else null, if (settings.ultraHdrJpeg) "UHDR" else null,
+                if (settings.inSensorZoomJpeg && controls.zoom > 1.001f) "ISZ" else null,
                 if (settings.burstMode) "BURST" else null, if (settings.timerSeconds > 0) "${settings.timerSeconds}S" else null,
             )
             if (modes.isNotEmpty()) Text(modes.joinToString(" · "), color = LatentColors.Amber, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp))
@@ -285,14 +280,14 @@ fun CameraScreen(
             if (drawerOpen) {
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(8.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xEE2C2C2A)).padding(8.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Tile("In-sensor 2x", settings.inSensorZoomJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(inSensorZoomJpeg = it, saveJpeg = if (it) true else settings.saveJpeg)) }
-                        Tile("DCG", settings.dcgMode, Modifier.weight(1f)) { onSettingsChange(settings.copy(dcgMode = it)) }
-                        Tile("Staggered HDR", settings.sensorShdr, Modifier.weight(1f)) { onSettingsChange(settings.copy(sensorShdr = it)) }
-                        Tile("RAW + JPEG", settings.saveJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(saveJpeg = it, inSensorZoomJpeg = if (!it) false else settings.inSensorZoomJpeg)) }
+                        Tile("In-sensor ×2", settings.inSensorZoomJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(inSensorZoomJpeg = it)) }
+                        Tile("RAW + JPEG", settings.saveJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(saveJpeg = it)) }
+                        Tile("Gridlines", settings.gridlines, Modifier.weight(1f)) { onSettingsChange(settings.copy(gridlines = it)) }
+                        Tile("Haptics", settings.haptics, Modifier.weight(1f)) { onSettingsChange(settings.copy(haptics = it)) }
                     }
                     Spacer(Modifier.height(6.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Tile("Better JPEG", settings.betterJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(betterJpeg = it, saveJpeg = if (it) true else settings.saveJpeg)) }
+                        Tile("Tele direct zoom", settings.teleZoomDirect, Modifier.weight(1f)) { onSettingsChange(settings.copy(teleZoomDirect = it)) }
                         Tile(if (settings.timerSeconds == 0) "Timer off" else "Timer ${settings.timerSeconds}s", settings.timerSeconds > 0, Modifier.weight(1f)) {
                             onSettingsChange(settings.copy(timerSeconds = when (settings.timerSeconds) { 0 -> 3; 3 -> 10; else -> 0 }))
                         }

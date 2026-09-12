@@ -77,22 +77,20 @@ class CameraController(
     @Volatile var vendorTags: List<VendorTagSpec> = emptyList()
     /** Built-in feature: Qualcomm in-sensor zoom for the JPEG path. */
     @Volatile var inSensorZoomJpeg = false
-    @Volatile var dcgMode = false
-    @Volatile var sensorShdr = false
-    @Volatile var betterJpeg = false
-    @Volatile var ultraHdrJpeg = false
-    private var jpegIsUltraHdr = false
+    /** Open a tele lens directly while zoomed (stops the logical camera switching sensors). */
+    @Volatile var teleZoomDirect = true
+    private var jpegIsUltraHdr = false   // kept false: JPEG_R cannot share a session with RAW on tested devices
     /** Set once a JPEG_R session has failed on this device: RAW + Ultra HDR + preview is not a supported combination. */
     private var ultraHdrUnsupported = false
     /** Everything that requires a new session if it changes. */
     private fun sessionSignature() = listOf(
-        lens.physicalId, cameraPath, opmode.toString(), saveJpeg.toString(), ultraHdrJpeg.toString(), betterJpeg.toString(),
-        inSensorZoomJpeg.toString(), dcgMode.toString(), sensorShdr.toString(), vendorTags.joinToString { it.name + it.scope + it.type + it.value },
+        lens.physicalId, cameraPath, opmode.toString(), wantJpeg.toString(),
+        allTags().joinToString { it.name + it.scope + it.type + it.value },
+        (teleZoomDirect && controls.zoom > 1.001f && lens.physicalId != "2").toString(),
     ).joinToString("|")
     private var openSignature: String? = null
     @Volatile private var opening = false
-    /** Ultra HDR and Better JPEG are JPEG features: either of them implies saving a JPEG. */
-    private val wantJpeg get() = saveJpeg || ultraHdrJpeg || betterJpeg
+    private val wantJpeg get() = saveJpeg
 
     /** Rebuilds the session if any stream- or tag-affecting setting changed since it was opened. */
     fun syncSession() = handler.post {
@@ -102,20 +100,11 @@ class CameraController(
     }
     /** Android's JPEG_R format (Ultra HDR, base JPEG + gain map). Constant kept literal for older compile targets. */
     private val FORMAT_JPEG_R = 4101
-    private val MFNR_KEY = "org.codeaurora.qcamera3.sessionParameters.enableMFNR"
-    private val SNAPHDR_KEY = "org.codeaurora.qcamera3.sessionParameters.SnapshotHDRMode"
-    private val JPEGR_KEY = "com.xiaomi.sessionparams.jpegrEnable"
     private val ISZ_KEY = "org.codeaurora.qcamera3.sessionParameters.EnableInsensorZoom"
-    private val DCG_KEY = "org.codeaurora.qcamera3.sessionParameters.EnableHDRDCGMode"
-    private val SHDR_KEY = "org.codeaurora.qcamera3.sessionParameters.inSensorSHDRMode"
+    /** User tags plus, only while ×2 is actually on, the in-sensor-zoom hint. Nothing else is ever sent. */
     private fun allTags(): List<VendorTagSpec> {
-        val out = ArrayList(vendorTags)
-        fun add(k: String) { if (out.none { it.name == k }) out += VendorTagSpec(k, "session", "i32", "1") }
-        if (inSensorZoomJpeg) add(ISZ_KEY)
-        if (dcgMode) add(DCG_KEY)
-        if (sensorShdr) add(SHDR_KEY)
-        if (betterJpeg) { add(MFNR_KEY); add(SNAPHDR_KEY) }
-        if (ultraHdrJpeg && !jpegIsUltraHdr) add(JPEGR_KEY) // vendor hint only when the standard format is unavailable
+        val out = ArrayList(vendorTags.filter { it.name.isNotBlank() })
+        if (inSensorZoomJpeg && controls.zoom > 1.001f && out.none { it.name == ISZ_KEY }) out += VendorTagSpec(ISZ_KEY, "session", "i32", "1")
         return out
     }
     @Volatile var onVendorEcho: (String) -> Unit = {}
@@ -168,7 +157,7 @@ class CameraController(
             this.previewSurface = surface
             // A zoom ratio on a logical multi-camera lets the driver hand the frame to another sensor
             // (visible switch + refocus). Opening the lens directly keeps it on the sensor we chose.
-            val zoomedTele = controls.zoom > 1.001f && lens.physicalId != "2"
+            val zoomedTele = teleZoomDirect && controls.zoom > 1.001f && lens.physicalId != "2"
             directOpen = cameraPath == "direct" || fallbackDirect || zoomedTele
             if (zoomedTele) log("zoom on ${lens.name}: opening the lens directly to stop the logical camera switching sensors")
             logicalId = if (cameraPath == "direct") Lenses.LOGICAL_ID else cameraPath
@@ -180,15 +169,13 @@ class CameraController(
                 rawReader = ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 6).also {
                     it.setOnImageAvailableListener({ r -> onRawImage(r) }, handler)
                 }
-                jpegIsUltraHdr = ultraHdrJpeg && !ultraHdrUnsupported && Build.VERSION.SDK_INT >= 34 &&
-                map.outputFormats.contains(FORMAT_JPEG_R) && (map.getOutputSizes(FORMAT_JPEG_R)?.isNotEmpty() == true)
+                jpegIsUltraHdr = false
             jpegReader = if (wantJpeg) {
                 val fmt = if (jpegIsUltraHdr) FORMAT_JPEG_R else ImageFormat.JPEG
                 val allSizes = map.getOutputSizes(fmt)?.toList().orEmpty()
                 val sameAspect = allSizes.filter { Math.abs(it.width.toFloat() / it.height - rawSize.width.toFloat() / rawSize.height) < 0.02f }
                 val jpegSize = (sameAspect.ifEmpty { allSizes }).maxByOrNull { it.width.toLong() * it.height } ?: rawSize
-                log("JPEG stream: " + (if (jpegIsUltraHdr) "JPEG_R (Ultra HDR)" else "JPEG") + " ${jpegSize.width}x${jpegSize.height}" +
-                    (if (ultraHdrJpeg && !jpegIsUltraHdr) " · Ultra HDR requested but JPEG_R not offered here" else ""))
+                log("JPEG stream: JPEG ${jpegSize.width}x${jpegSize.height}")
                 ImageReader.newInstance(jpegSize.width, jpegSize.height, fmt, 4).also {
                     it.setOnImageAvailableListener({ r -> onJpegImage(r) }, handler)
                 }
@@ -248,7 +235,7 @@ class CameraController(
             }
         })
         try {
-            val sessionTags = allTags().filter { it.scope == "session" && it.name.isNotBlank() }
+            val sessionTags = allTags().filter { it.scope == "session" }
             if (sessionTags.isNotEmpty()) {
                 val sp = dev.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                 sessionTags.forEach { applyVendorTag(sp, it) }
@@ -302,10 +289,11 @@ class CameraController(
     }
 
     fun setControls(c: Controls) = handler.post {
-        val wasZoomedTele = controls.zoom > 1.001f && lens.physicalId != "2"
+        val wasZoomedTele = teleZoomDirect && controls.zoom > 1.001f && lens.physicalId != "2"
+        val crossedZoom = (controls.zoom > 1.001f) != (c.zoom > 1.001f)
         controls = c
-        val isZoomedTele = c.zoom > 1.001f && lens.physicalId != "2"
-        if (wasZoomedTele != isZoomedTele) previewSurface?.let { open(lens, it) } else updatePreview()
+        val isZoomedTele = teleZoomDirect && c.zoom > 1.001f && lens.physicalId != "2"
+        if (wasZoomedTele != isZoomedTele || (crossedZoom && inSensorZoomJpeg)) previewSurface?.let { open(lens, it) } else updatePreview()
     }
     fun setAntibanding(mode: Int) = handler.post { antibanding = mode; updatePreview() }
 
@@ -458,19 +446,7 @@ class CameraController(
             applyControls(this)
             set(CaptureRequest.JPEG_ORIENTATION, physChars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90)
             set(CaptureRequest.JPEG_QUALITY, 100.toByte())
-            if (betterJpeg) {
-                // JPEG/YUV path only; RAW is never touched by these.
-                fun <T> hq(key: CaptureRequest.Key<T>, avail: CameraCharacteristics.Key<IntArray>, mode: Int) {
-                    @Suppress("UNCHECKED_CAST")
-                    if (physChars.get(avail)?.contains(mode) == true) set(key as CaptureRequest.Key<Int>, mode)
-                }
-                hq(CaptureRequest.NOISE_REDUCTION_MODE, CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES, CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY)
-                hq(CaptureRequest.EDGE_MODE, CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES, CameraMetadata.EDGE_MODE_HIGH_QUALITY)
-                hq(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES, CameraMetadata.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY)
-                hq(CaptureRequest.TONEMAP_MODE, CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES, CameraMetadata.TONEMAP_MODE_HIGH_QUALITY)
-                hq(CaptureRequest.SHADING_MODE, CameraCharacteristics.SHADING_AVAILABLE_MODES, CameraMetadata.SHADING_MODE_HIGH_QUALITY)
-                if (Build.VERSION.SDK_INT >= 28) hq(CaptureRequest.DISTORTION_CORRECTION_MODE, CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES, CameraMetadata.DISTORTION_CORRECTION_MODE_HIGH_QUALITY)
-            }
+
         }
     }
 
@@ -676,7 +652,7 @@ class CameraController(
     }
 
     /** True when Ultra HDR is wanted but cannot share a session with RAW: capture it as a second step. */
-    private val hdrJpegSequential get() = ultraHdrJpeg && ultraHdrUnsupported
+    private val hdrJpegSequential get() = false
 
     private var hdrReader: ImageReader? = null
 

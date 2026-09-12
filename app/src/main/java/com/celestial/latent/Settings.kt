@@ -23,14 +23,11 @@ data class AppSettings(
     val cameraPath: String = "0",       // logical camera ID to route through ("0", "6", "7"...) or "direct"
     val opmode: Int = 0,                // vendor session operating mode; 0 = regular
     val vendorTags: List<VendorTag> = emptyList(),
-    val inSensorZoomJpeg: Boolean = false,  // Qualcomm EnableInsensorZoom: native-crop JPEG at 2x (RAW stays 1x for now)
-    val dcgMode: Boolean = false,           // EnableHDRDCGMode=1 (experimental; measure with the quality probe)
-    val sensorShdr: Boolean = false,        // inSensorSHDRMode=1 (experimental)
+    val inSensorZoomJpeg: Boolean = true,   // EnableInsensorZoom, sent only while ×2 is on (JPEG path; RAW stays 1x)
+    val teleZoomDirect: Boolean = true,     // open a tele lens directly while zoomed, so the logical camera cannot switch sensors
     val timerSeconds: Int = 0,              // 0 / 3 / 10
     val burstMode: Boolean = false,         // tap = 16-frame burst (hold = single)
     val haptics: Boolean = true,
-    val betterJpeg: Boolean = false,   // driver multi-frame NR + snapshot HDR + HQ post-processing (JPEG path only)
-    val ultraHdrJpeg: Boolean = false, // com.xiaomi.sessionparams.jpegrEnable=1 (gain-map JPEG)
 ) {
     companion object {
         const val ANTIBANDING_OFF = 0
@@ -53,14 +50,11 @@ data class AppSettings(
                 cameraPath = p.getString("cameraPath", if (p.getBoolean("directOpen", false)) "direct" else "0") ?: "0",
                 opmode = p.getInt("opmode", 0),
                 vendorTags = (p.getString("vendorTags", "") ?: "").split("\n").mapNotNull { VendorTag.decode(it) },
-                inSensorZoomJpeg = p.getBoolean("inSensorZoomJpeg", false),
-                dcgMode = p.getBoolean("dcgMode", false),
-                sensorShdr = p.getBoolean("sensorShdr", false),
+                inSensorZoomJpeg = p.getBoolean("inSensorZoomJpeg", true),
+                teleZoomDirect = p.getBoolean("teleZoomDirect", true),
                 timerSeconds = p.getInt("timerSeconds", 0),
                 burstMode = p.getBoolean("burstMode", false),
                 haptics = p.getBoolean("haptics", true),
-                betterJpeg = p.getBoolean("betterJpeg", false),
-                ultraHdrJpeg = p.getBoolean("ultraHdrJpeg", false),
             )
         }
 
@@ -77,13 +71,10 @@ data class AppSettings(
                 .putInt("opmode", s.opmode)
                 .putString("vendorTags", s.vendorTags.joinToString("\n") { it.encode() })
                 .putBoolean("inSensorZoomJpeg", s.inSensorZoomJpeg)
-                .putBoolean("dcgMode", s.dcgMode)
-                .putBoolean("sensorShdr", s.sensorShdr)
+                .putBoolean("teleZoomDirect", s.teleZoomDirect)
                 .putInt("timerSeconds", s.timerSeconds)
                 .putBoolean("burstMode", s.burstMode)
                 .putBoolean("haptics", s.haptics)
-                .putBoolean("betterJpeg", s.betterJpeg)
-                .putBoolean("ultraHdrJpeg", s.ultraHdrJpeg)
                 .apply()
         }
     }

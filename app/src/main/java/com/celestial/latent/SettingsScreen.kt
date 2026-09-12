@@ -52,26 +52,17 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
         Section("Viewfinder")
         ToggleRow("Gridlines", "Rule-of-thirds lines over the preview", settings.gridlines) { onChange(settings.copy(gridlines = it)) }
 
-        Section("Sensor modes (experimental)")
-        ToggleRow("DCG mode", "Sends EnableHDRDCGMode=1. The driver accepts it; whether it changes the RAW is what the quality probe measures. Takes effect on next lens switch.", settings.dcgMode) { onChange(settings.copy(dcgMode = it)) }
-        ToggleRow("In-sensor staggered HDR", "Sends inSensorSHDRMode=1. Same caveat.", settings.sensorShdr) { onChange(settings.copy(sensorShdr = it)) }
-
         Section("Files")
-        ToggleRow("Better JPEG", "Asks the driver for multi-frame noise reduction, snapshot HDR and high-quality post-processing on the JPEG. RAW is unchanged. Turns on RAW + JPEG.", settings.betterJpeg) {
-            onChange(settings.copy(betterJpeg = it, saveJpeg = if (it) true else settings.saveJpeg))
-        }
-        ToggleRow("Ultra HDR JPEG", "Saves the JPEG with a gain map, so highlights glow on HDR screens. Many phones (including this one) cannot produce it while also capturing RAW — Latent falls back to a plain JPEG and says so if that happens.", settings.ultraHdrJpeg) { onChange(settings.copy(ultraHdrJpeg = it, saveJpeg = if (it) true else settings.saveJpeg)) }
         OptionRow(
             title = "Format",
             subtitle = "RAW is always saved. The JPEG is the camera driver's own processed copy, handy for sharing; it is not the film-developed result.",
             options = listOf("RAW" to false, "RAW + JPEG" to true),
-            selected = settings.saveJpeg || settings.ultraHdrJpeg || settings.betterJpeg,
-        ) { onChange(settings.copy(saveJpeg = it, ultraHdrJpeg = if (!it) false else settings.ultraHdrJpeg, betterJpeg = if (!it) false else settings.betterJpeg)) }
+            selected = settings.saveJpeg,
+        ) { onChange(settings.copy(saveJpeg = it)) }
 
         Section("Shooting")
-        ToggleRow("2x in-sensor zoom (JPEG)", "Uses the sensor's native centre crop for the 2x JPEG on lenses that support it. Turns on RAW + JPEG. The RAW file stays 1x for now.", settings.inSensorZoomJpeg) {
-            onChange(settings.copy(inSensorZoomJpeg = it, saveJpeg = if (it) true else settings.saveJpeg))
-        }
+        ToggleRow("In-sensor zoom at ×2", "Asks the driver for the sensor's native centre crop while ×2 is on (JPEG path; the RAW stays the full frame). Nothing is sent at normal zoom.", settings.inSensorZoomJpeg) { onChange(settings.copy(inSensorZoomJpeg = it)) }
+        ToggleRow("Open tele lenses directly when zoomed", "Stops the logical camera handing the frame to another sensor mid-zoom (the visible switch and refocus).", settings.teleZoomDirect) { onChange(settings.copy(teleZoomDirect = it)) }
         ToggleRow("Volume buttons take the photo", "Either volume key acts as the shutter", settings.volumeShutter) { onChange(settings.copy(volumeShutter = it)) }
         ToggleRow("Haptics", "Click on the shutter, ticks on slider steps and lens changes", settings.haptics) { onChange(settings.copy(haptics = it)) }
         ToggleRow("Remember last lens", "Open on the lens you used last time", settings.rememberLens) { onChange(settings.copy(rememberLens = it)) }
