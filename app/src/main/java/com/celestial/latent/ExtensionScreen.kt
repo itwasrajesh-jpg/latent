@@ -355,7 +355,11 @@ fun ExtensionScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Un
                         .combinedClickable(onClick = { Haptics.tick(context); iszOn = !iszOn; cam.isz = iszOn; cam.refresh() }).padding(horizontal = 8.dp, vertical = 3.dp))
             }
             Text((if (zoomOk) "LENS VIA ZOOM" else "LENS BY XIAOMI") + " · FILM OVER JPEG", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 76.dp))
-            FilmStrip(settings.film, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) { f -> onSettingsChange(settings.copy(film = f)) }
+            FilmStrip(settings.film, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) { f ->
+                onSettingsChange(settings.copy(film = f))
+                com.celestial.latent.develop.Recipes.setCurrent(context,
+                    com.celestial.latent.develop.Develop.pairedWithFilm(com.celestial.latent.develop.Recipes.current(context).copy(film = f)))
+            }
             if (toast.isNotEmpty()) Text(toast, color = LatentColors.TextBright, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp).clip(RoundedCornerShape(8.dp)).background(androidx.compose.ui.graphics.Color(0xCC161615)).padding(12.dp))
             caps?.let { c ->
                 FocusEvOverlay(

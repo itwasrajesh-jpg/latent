@@ -301,7 +301,12 @@ fun CameraScreen(
                         .combinedClickable(onClick = { Haptics.tick(context); push(controls.copy(zoom = if (zoomOn) 1f else 2f)) }).padding(horizontal = 9.dp, vertical = 3.dp))
             }
             FilmStrip(settings.film, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
-                onLongPress = { lastRawUri?.let { u -> onOpenDarkroom(u, true) } }) { f -> onSettingsChange(settings.copy(film = f)) }
+                onLongPress = { lastRawUri?.let { u -> onOpenDarkroom(u, true) } }) { f ->
+                    onSettingsChange(settings.copy(film = f))
+                    // Keep the saved recipe paired with the film the camera is loaded with.
+                    com.celestial.latent.develop.Recipes.setCurrent(context,
+                        com.celestial.latent.develop.Develop.pairedWithFilm(com.celestial.latent.develop.Recipes.current(context).copy(film = f)))
+                }
             if (toast.isNotEmpty()) Text(toast, color = LatentColors.TextBright, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xCC161615)).padding(12.dp))
             // Quick-settings drawer over the lower part of the viewfinder.
             if (drawerOpen) {

@@ -118,17 +118,26 @@ object Develop {
         val buf = ByteBuffer.allocateDirect(w * h * 3 * 4).order(ByteOrder.nativeOrder())
         val f = buf.asFloatBuffer()
         val row = IntArray(w)
-        fun toLinear(v: Int): Float {
-            val c = v / 255f
-            return if (c <= 0.04045f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
+        // sRGB's curve removed, then sRGB primaries → ProPhoto primaries. The engine always
+        // reads incoming pixels as linear ProPhoto regardless of the label, so this conversion
+        // has to happen here; without it a JPEG source develops muted and slightly off-hue.
+        val lut = FloatArray(256) { i ->
+            val c = i / 255f
+            if (c <= 0.04045f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
         }
         for (y in 0 until h) {
             bmp.getPixels(row, 0, w, 0, y, w, 1)
-            for (x in 0 until w) { val p = row[x]; f.put(toLinear((p shr 16) and 0xFF)); f.put(toLinear((p shr 8) and 0xFF)); f.put(toLinear(p and 0xFF)) }
+            for (x in 0 until w) {
+                val p = row[x]
+                val r = lut[(p shr 16) and 0xFF]; val g = lut[(p shr 8) and 0xFF]; val b = lut[p and 0xFF]
+                f.put(0.5294f * r + 0.3300f * g + 0.1406f * b)
+                f.put(0.0983f * r + 0.8735f * g + 0.0282f * b)
+                f.put(0.0168f * r + 0.1178f * g + 0.8654f * b)
+            }
         }
         if (bmp !== src) bmp.recycle()
         src.recycle()
-        return Source(LinearImage(buf, w, h, colorSpace = "sRGB"), w, h)
+        return Source(LinearImage(buf, w, h, colorSpace = "ProPhoto RGB"), w, h)
     }
 
     /**
@@ -205,11 +214,57 @@ object Develop {
 
     const val DEFAULT_PAPER = "kodak_portra_endura"
 
+    /**
+     * The print stock each film was designed for, taken from the profiles' own `target_print`.
+     * Slide films (null) have no print stage at all — they are scanned as positives.
+     */
+    private val TARGET_PRINT = mapOf(
+        "kodak_portra_160" to "kodak_portra_endura",
+        "kodak_portra_400" to "kodak_portra_endura",
+        "kodak_portra_800" to "kodak_portra_endura",
+        "kodak_portra_800_push1" to "kodak_portra_endura",
+        "kodak_portra_800_push2" to "kodak_portra_endura",
+        "kodak_gold_200" to "kodak_portra_endura",
+        "kodak_ultramax_400" to "kodak_portra_endura",
+        "kodak_ektar_100" to "kodak_portra_endura",
+        "fujifilm_c200" to "fujifilm_crystal_archive_typeii",
+        "fujifilm_pro_400h" to "fujifilm_crystal_archive_typeii",
+        "fujifilm_xtra_400" to "fujifilm_crystal_archive_typeii",
+        "kodak_vision3_50d" to "kodak_2383",
+        "kodak_vision3_250d" to "kodak_2383",
+        "kodak_vision3_200t" to "kodak_2383",
+        "kodak_vision3_500t" to "kodak_2383",
+        "kodak_verita_200d" to "kodak_2383",
+        // Slide films: no print. Scanned directly as positives.
+        "fujifilm_provia_100f" to null,
+        "fujifilm_velvia_100" to null,
+        "kodak_ektachrome_100" to null,
+        "kodak_kodachrome_64" to null,
+    )
+
+    /** True for a slide film: there is no print stage, so the negative is scanned directly. */
+    fun isSlideFilm(film: String) = TARGET_PRINT.containsKey(film) && TARGET_PRINT[film] == null
+
+    /** The paper this film was meant to be printed on. */
+    fun targetPrint(film: String): String? = TARGET_PRINT[film]
+
+    /**
+     * Sets the paper (and the direct-scan switch) to what the chosen film was designed for.
+     * Called when the film changes, so the default pairing is always the authentic one.
+     */
+    fun pairedWithFilm(r: Recipe): Recipe {
+        val target = TARGET_PRINT[r.film]
+        return if (target == null && TARGET_PRINT.containsKey(r.film)) r.copy(scanFilm = true)
+               else r.copy(paper = target ?: r.paper, scanFilm = false)
+    }
+
     /** Guard against a saved recipe pointing at a profile in the wrong slot. */
     fun sanitised(r: Recipe): Recipe {
         val film = if (FILMS.any { it.first == r.film }) r.film else FILMS.first().first
         val paper = if (PAPERS.any { it.first == r.paper }) r.paper else DEFAULT_PAPER
-        return if (film == r.film && paper == r.paper) r else r.copy(film = film, paper = paper)
+        val fixed = if (film == r.film && paper == r.paper) r else r.copy(film = film, paper = paper)
+        // A slide film has no print stage; a negative must not be scanned directly by accident.
+        return if (isSlideFilm(fixed.film) && !fixed.scanFilm) fixed.copy(scanFilm = true) else fixed
     }
 
     fun availableProfiles(context: Context): List<String> =
@@ -320,22 +375,25 @@ object Develop {
         val buf = ByteBuffer.allocateDirect(w * h * 3 * 4).order(ByteOrder.nativeOrder())
         val f = buf.asFloatBuffer()
         val row = IntArray(w)
-        fun toLinear(v: Int): Float {
-            val c = v / 255f
-            return if (c <= 0.04045f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
+        val lut2 = FloatArray(256) { i ->
+            val c = i / 255f
+            if (c <= 0.04045f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
         }
         for (y in 0 until h) {
             bmp.getPixels(row, 0, w, 0, y, w, 1)
             for (x in 0 until w) {
                 val p = row[x]
-                f.put(toLinear((p shr 16) and 0xFF)); f.put(toLinear((p shr 8) and 0xFF)); f.put(toLinear(p and 0xFF))
+                val r = lut2[(p shr 16) and 0xFF]; val g = lut2[(p shr 8) and 0xFF]; val b = lut2[p and 0xFF]
+                f.put(0.5294f * r + 0.3300f * g + 0.1406f * b)
+                f.put(0.0983f * r + 0.8735f * g + 0.0282f * b)
+                f.put(0.0168f * r + 0.1178f * g + 0.8654f * b)
             }
         }
         if (bmp !== src) bmp.recycle()
         src.recycle()
         log("developing…")
         var dims = 0 to 0
-        val jpeg = LinearImage(buf, w, h, colorSpace = "sRGB").use { img ->
+        val jpeg = LinearImage(buf, w, h, colorSpace = "ProPhoto RGB").use { img ->
             SpektraEngine.fromAssets(context.assets).use { engine ->
                 engine.simulate(img, sanitised(recipe).toParams()).use { r -> dims = r.width to r.height; toJpeg(r.data, r.width, r.height, r.colorSpace) }
             }

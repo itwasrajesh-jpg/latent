@@ -225,7 +225,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                     val on = id == recipe.film
                     Text(label.uppercase(), color = if (on) LatentColors.AmberInk else LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp,
                         modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (on) LatentColors.Amber else LatentColors.Surface)
-                            .combinedClickable(onClick = { Haptics.tick(context); set { copy(film = id) } }).padding(horizontal = 11.dp, vertical = 7.dp))
+                            .combinedClickable(onClick = { Haptics.tick(context); set { Develop.pairedWithFilm(copy(film = id)) } }).padding(horizontal = 11.dp, vertical = 7.dp))
                 }
             }
             // Tabs
@@ -294,6 +294,12 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                         Note("Format changes how big grain and halation look, because they are measured in micrometres on the negative.")
                     }
                     "enlarger" -> {
+                        if (Develop.isSlideFilm(recipe.film)) {
+                            Note("${Develop.FILMS.firstOrNull { it.first == recipe.film }?.second ?: recipe.film} is a slide film: there is no print stage, so it is scanned directly as a positive. The controls below do nothing for it.")
+                        } else {
+                            val target = Develop.targetPrint(recipe.film)
+                            if (target != null) Note("This film was made for " + (Develop.PAPERS.firstOrNull { it.first == target }?.second ?: target) + ", which is selected automatically. Change it if you want a different pairing.")
+                        }
                         Head("PAPER / PRINT STOCK", null) {}
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Develop.PAPERS.forEach { (id, label) ->
@@ -331,6 +337,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                     "colour" -> {
                         Head("OUTPUT COLOUR SPACE", null) {}
                         Chips(listOf("SRGB", "ADOBE_RGB", "PROPHOTO", "REC2020", "ACES2065_1", "LINEAR_SRGB"), recipe.outputColorSpace) { set { copy(outputColorSpace = it) } }
+                        if (recipe.outputColorSpace != "SRGB") Note("A JPEG has only 256 steps per channel. Spread over a wide space this can band in skies and skin. sRGB is the safe choice; Adobe RGB is a modest step up.")
                         Head("OUT-OF-GAMUT COLOURS", null) {}
                         Chips(listOf("LEGACY_CLIP", "OFF", "ACES_RGC", "OKLCH", "OKLRAB"), recipe.outputGamutCompress) { set { copy(outputGamutCompress = it) } }
                         Head("FILMING-SIDE COMPRESSION", null) {}
