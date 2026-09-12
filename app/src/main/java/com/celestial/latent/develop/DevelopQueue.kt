@@ -15,6 +15,13 @@ object DevelopQueue {
     data class Job(val source: Uri, val recipe: Recipe, val isRaw: Boolean)
 
     private val pool = Executors.newSingleThreadExecutor { r -> Thread(r, "latent-develop").apply { priority = Thread.MIN_PRIORITY } }
+
+    /**
+     * Only one engine may run at a time: each instance loads the film data and allocates a
+     * full-resolution buffer, so two at once compete for memory and stall. The darkroom takes
+     * this while it renders a preview; background developing waits its turn.
+     */
+    val engineLane = java.util.concurrent.Semaphore(1, true)
     private val pending = AtomicInteger(0)
 
     /** Number of photos waiting or being developed right now. */
@@ -26,6 +33,7 @@ object DevelopQueue {
     fun submit(context: Context, job: Job) {
         pending.incrementAndGet(); onChanged()
         pool.execute {
+            engineLane.acquire()
             try {
                 val out = if (job.isRaw) Develop.developDng(context.applicationContext, job.source, job.recipe)
                           else Develop.developJpeg(context.applicationContext, job.source, job.recipe)
@@ -33,6 +41,7 @@ object DevelopQueue {
             } catch (t: Throwable) {
                 Log.e("Latent", "develop failed for ${job.source}", t)
             } finally {
+                engineLane.release()
                 pending.decrementAndGet(); onChanged()
             }
         }

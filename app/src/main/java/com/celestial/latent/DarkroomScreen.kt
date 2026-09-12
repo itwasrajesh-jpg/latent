@@ -90,6 +90,11 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
         rendering = true
         val r = recipe
         Thread {
+            val lane = com.celestial.latent.develop.DevelopQueue.engineLane
+            if (!lane.tryAcquire()) {
+                status = "waiting for the background develop to finish…"
+                lane.acquire()
+            }
             try {
                 val t = System.nanoTime()
                 val (bytes, dims) = if (isRaw) Develop.developDngTo(context, source, r, PREVIEW_EDGE)
@@ -97,6 +102,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                 preview = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 status = "preview ${dims.first}×${dims.second} · ${(System.nanoTime() - t) / 1_000_000} ms"
             } catch (t: Throwable) { status = "failed: ${t.message}" }
+            finally { lane.release() }
             rendering = false
             if (pendingAt > 0) { pendingAt = 0; render() }
         }.start()
