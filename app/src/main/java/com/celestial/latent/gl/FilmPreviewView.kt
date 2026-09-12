@@ -178,22 +178,36 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             GLES20.glDisableVertexAttribArray(uv)
         }
 
-        /** The 3D table is stored as a wide 2D strip: size×size across, size down. */
+        /**
+         * The table is uploaded as a wide 2D strip: x = blue*size + red, y = green.
+         *
+         * The engine emits its entries with BLUE varying fastest and RED slowest, so the entry
+         * for a colour (r, g, b) sits at ((r*size + g)*size + b). Getting this order wrong
+         * scrambles the colour axes while still looking like a film, so it is spelled out here.
+         */
         private fun uploadPendingLut() {
             val lut = pendingLut ?: return
             pendingLut = null
             val n = pendingLutSize
+            if (lut.size < n * n * n * 3) {
+                Log.e("Latent", "film preview: look table has ${lut.size / 3} entries, expected ${n * n * n}")
+                return
+            }
             if (lutTexture == 0) {
                 val ids = IntArray(1); GLES20.glGenTextures(1, ids, 0); lutTexture = ids[0]
             }
             val w = n * n
             val bytes = java.nio.ByteBuffer.allocateDirect(w * n * 4).order(java.nio.ByteOrder.nativeOrder())
-            for (b in 0 until n) for (g in 0 until n) for (r in 0 until n) {
-                val i = ((b * n + g) * n + r) * 3
-                bytes.put(((lut[i] * 255f).toInt().coerceIn(0, 255)).toByte())
-                bytes.put(((lut[i + 1] * 255f).toInt().coerceIn(0, 255)).toByte())
-                bytes.put(((lut[i + 2] * 255f).toInt().coerceIn(0, 255)).toByte())
-                bytes.put(255.toByte())
+            for (g in 0 until n) {              // texture row
+                for (b in 0 until n) {          // slice across the row
+                    for (r in 0 until n) {      // position within the slice
+                        val i = ((r * n + g) * n + b) * 3   // engine order: blue fastest
+                        bytes.put(((lut[i] * 255f + 0.5f).toInt().coerceIn(0, 255)).toByte())
+                        bytes.put(((lut[i + 1] * 255f + 0.5f).toInt().coerceIn(0, 255)).toByte())
+                        bytes.put(((lut[i + 2] * 255f + 0.5f).toInt().coerceIn(0, 255)).toByte())
+                        bytes.put(255.toByte())
+                    }
+                }
             }
             bytes.rewind()
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lutTexture)
@@ -202,8 +216,9 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
             GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, n, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, bytes)
+            check("look table upload")
             lutSize = n
-            Log.i("Latent", "film preview: look table uploaded ($n³)")
+            Log.i("Latent", "film preview: look table live ($n³)")
         }
 
         fun release() {

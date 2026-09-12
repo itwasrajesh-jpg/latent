@@ -119,6 +119,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                     src = Develop.openCached(context, source, isRaw, DECODE_EDGE) { m -> status = m }
                     status = "decoded ${src!!.width}×${src!!.height}"
                 }
+                Develop.denoiseSource(src!!, r, Develop.isoOf(context, source)) { m -> status = m }
                 // Middle of the frame first on the quick pass: it appears sooner and reads the same.
                 val target = if (cropFraction < 1f) Develop.centreCrop(src!!, cropFraction).also { cropped = it } else src!!
                 val t0 = System.nanoTime()
@@ -161,6 +162,9 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
         coarse = false
         onRecipeChanged(recipe); Recipes.setCurrent(context, recipe)
         render(fast = false)
+        // The viewfinder's look is baked from the saved recipe: drop the cached one so the
+        // camera picks up these edits next time it is shown.
+        com.celestial.latent.develop.LookBaker.invalidate()
     }
     // The decoded copy is kept by Develop.Cache so coming back is instant; nothing to free here.
 
@@ -268,6 +272,16 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                         S("Exposure", recipe.exposureEv, -3f, 3f, "%+.1f EV") { set { copy(exposureEv = it) } }
                         S("Push / pull", recipe.pushStops, -2f, 3f, "%+.1f stop") { set { copy(pushStops = it) } }
                         S("Film contrast", recipe.filmContrast, 0.6f, 1.6f, "%.2f") { set { copy(filmContrast = it) } }
+                        Head("COLOUR NOISE", null) {}
+                        val auto = recipe.chromaDenoise < 0f
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(if (auto) "AUTO · FROM ISO" else "MANUAL", color = if (auto) LatentColors.AmberInk else LatentColors.Text, fontSize = 10.sp,
+                                modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(if (auto) LatentColors.Amber else LatentColors.Surface)
+                                    .combinedClickable(onClick = { Haptics.tick(context); set { copy(chromaDenoise = if (auto) 0.4f else -1f) } })
+                                    .padding(horizontal = 10.dp, vertical = 5.dp))
+                        }
+                        if (!auto) S("Amount", recipe.chromaDenoise, 0f, 1f, "%.2f") { set { copy(chromaDenoise = it) } }
+                        Note("Sensor blotches in dark shots are not film grain, and the dye couplers make them worse. This cleans the colour only — brightness, detail and grain are untouched.")
                         Head("DIR COUPLERS", recipe.dir) { set { copy(dir = it) } }
                         S("Amount", recipe.dirAmount, 0f, 2f, "%.2f", recipe.dir) { set { copy(dirAmount = it) } }
                         S("Same-layer inhibition", recipe.dirSameLayer, 0f, 2f, "%.2f", recipe.dir) { set { copy(dirSameLayer = it) } }

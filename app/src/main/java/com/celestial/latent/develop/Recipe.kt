@@ -58,6 +58,8 @@ data class Recipe(
     val dirInterLayer: Float = 1.0f,
     val dirDiffusionUm: Float = 20f,
     // Camera
+    /** Colour-noise cleanup before the film sees the image. -1 = choose from the shot's ISO. */
+    val chromaDenoise: Float = -1f,
     val lensBlurUm: Float = 0f,
     val filmFormatMm: Float = 35f,
     // Diffusion filter on the lens
@@ -177,6 +179,7 @@ data class Recipe(
         put("grainDyeCloudUm", grainDyeCloudUm.toDouble()); put("grainSublayerCount", grainSublayerCount)
         put("dir", dir); put("dirAmount", dirAmount.toDouble()); put("dirSameLayer", dirSameLayer.toDouble())
         put("dirInterLayer", dirInterLayer.toDouble()); put("dirDiffusionUm", dirDiffusionUm.toDouble())
+        put("chromaDenoise", chromaDenoise.toDouble())
         put("lensBlurUm", lensBlurUm.toDouble()); put("filmFormatMm", filmFormatMm.toDouble())
         put("diffusion", diffusion); put("diffusionFamily", diffusionFamily); put("diffusionStrength", diffusionStrength.toDouble())
         put("diffusionScale", diffusionScale.toDouble()); put("diffusionCore", diffusionCore.toDouble()); put("diffusionCoreSize", diffusionCoreSize.toDouble())
@@ -212,6 +215,7 @@ data class Recipe(
                 grainSublayerCount = o.optInt("grainSublayerCount", d.grainSublayerCount),
                 dir = o.optBoolean("dir", d.dir), dirAmount = f("dirAmount", d.dirAmount), dirSameLayer = f("dirSameLayer", d.dirSameLayer),
                 dirInterLayer = f("dirInterLayer", d.dirInterLayer), dirDiffusionUm = f("dirDiffusionUm", d.dirDiffusionUm),
+                chromaDenoise = f("chromaDenoise", d.chromaDenoise),
                 lensBlurUm = f("lensBlurUm", d.lensBlurUm), filmFormatMm = f("filmFormatMm", d.filmFormatMm),
                 diffusion = o.optBoolean("diffusion", d.diffusion), diffusionFamily = o.optString("diffusionFamily", d.diffusionFamily),
                 diffusionStrength = f("diffusionStrength", d.diffusionStrength), diffusionScale = f("diffusionScale", d.diffusionScale),

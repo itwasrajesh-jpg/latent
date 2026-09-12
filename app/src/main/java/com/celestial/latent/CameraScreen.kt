@@ -74,6 +74,8 @@ import com.celestial.latent.camera.Lenses
 import com.celestial.latent.camera.LiveReadout
 import com.celestial.latent.develop.Develop
 import com.celestial.latent.develop.DevelopQueue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.celestial.latent.ui.LatentColors
 import kotlinx.coroutines.delay
 
@@ -106,6 +108,8 @@ fun CameraScreen(
     var lastUri by remember { mutableStateOf<Uri?>(null) }
     var lastRawUri by remember { mutableStateOf<Uri?>(null) }
     var glPreview by remember { mutableStateOf<com.celestial.latent.gl.FilmPreviewView?>(null) }
+    var lookReady by remember { mutableStateOf(false) }
+    var baking by remember { mutableStateOf(false) }
     var thumb by remember { mutableStateOf<Bitmap?>(null) }
     var countdown by remember { mutableStateOf(0) }
     var developing by remember { mutableStateOf(DevelopQueue.queued) }
@@ -185,6 +189,27 @@ fun CameraScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
     LaunchedEffect(settings.antibanding) { controller.setAntibanding(settings.antibanding) }
+    // The film look for the viewfinder: baked off the main thread, and the previous one stays
+    // on screen while the new one is prepared, so the preview never flashes.
+    LaunchedEffect(settings.film, settings.filmPreview, glPreview) {
+        val view = glPreview
+        if (!settings.filmPreview || view == null) return@LaunchedEffect
+        baking = true
+        withContext(Dispatchers.Default) {
+            val recipe = com.celestial.latent.develop.Recipes.current(context).copy(film = settings.film)
+            val look = com.celestial.latent.develop.LookBaker.bake(context, recipe)
+            if (look != null) {
+                view.setExposureGain(look.gain)
+                view.setLut(look.table, look.size)
+                lookReady = true
+            } else {
+                lookReady = false
+                controller.log("viewfinder: no look table for ${settings.film}; showing the plain image")
+            }
+        }
+        baking = false
+    }
+
     // Any of these changes the streams or the session tags: push them, then let the controller rebuild if needed.
     LaunchedEffect(settings.cameraPath, settings.opmode, settings.opmodeLens, settings.vendorTags, settings.saveJpeg, settings.inSensorZoomJpeg, settings.teleZoomDirect) {
         controller.cameraPath = settings.cameraPath
@@ -307,8 +332,14 @@ fun CameraScreen(
                 Text(if (settings.saveJpeg) "RAW + JPG · 12.5M" else "RAW · 12.5M", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp)
                 // Says plainly what the live image is and is not, without crowding the frame.
                 if (settings.filmPreview) Text(
-                    (Develop.FILMS.firstOrNull { it.first == settings.film }?.second ?: "FILM").uppercase() + " · COLOUR ONLY",
-                    color = LatentColors.TextDim, fontSize = 9.sp, letterSpacing = 1.5.sp, modifier = Modifier.padding(top = 3.dp),
+                    (Develop.FILMS.firstOrNull { it.first == settings.film }?.second ?: "FILM").uppercase() +
+                        when {
+                            baking -> " · PREPARING"
+                            lookReady -> " · COLOUR ONLY"
+                            else -> " · PLAIN IMAGE"
+                        },
+                    color = if (lookReady) LatentColors.TextDim else LatentColors.Line,
+                    fontSize = 9.sp, letterSpacing = 1.5.sp, modifier = Modifier.padding(top = 3.dp),
                 )
             }
             val modes = listOfNotNull(

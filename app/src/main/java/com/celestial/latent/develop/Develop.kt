@@ -25,6 +25,8 @@ object Develop {
      * without decoding the RAW again. close() frees the native buffer.
      */
     class Source(val image: LinearImage, val width: Int, val height: Int) : AutoCloseable {
+        /** Colour noise is cleaned once per decode, not once per render. */
+        @Volatile var denoised = false
         override fun close() = image.close()
     }
 
@@ -48,6 +50,49 @@ object Develop {
         }
 
         @Synchronized fun clear() { entries.values.forEach { it.close() }; entries.clear() }
+    }
+
+    /**
+     * The ISO a capture was taken at, or 0 when unknown. Read straight from the file's TIFF
+     * header (tag 34855) rather than pulling in an EXIF library for one number.
+     */
+    fun isoOf(context: Context, uri: Uri): Int = try {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            val head = ByteArray(64 * 1024)
+            val n = input.read(head)
+            if (n < 16) 0 else readIsoTag(head, n)
+        } ?: 0
+    } catch (t: Throwable) { 0 }
+
+    private fun readIsoTag(b: ByteArray, len: Int): Int {
+        val little = b[0] == 'I'.code.toByte() && b[1] == 'I'.code.toByte()
+        val big = b[0] == 'M'.code.toByte() && b[1] == 'M'.code.toByte()
+        if (!little && !big) return 0
+        fun u16(o: Int) = if (o + 1 >= len) 0 else
+            if (little) (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8)
+            else ((b[o].toInt() and 0xFF) shl 8) or (b[o + 1].toInt() and 0xFF)
+        fun u32(o: Int) = if (o + 3 >= len) 0 else
+            if (little) (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8) or
+                ((b[o + 2].toInt() and 0xFF) shl 16) or ((b[o + 3].toInt() and 0xFF) shl 24)
+            else ((b[o].toInt() and 0xFF) shl 24) or ((b[o + 1].toInt() and 0xFF) shl 16) or
+                ((b[o + 2].toInt() and 0xFF) shl 8) or (b[o + 3].toInt() and 0xFF)
+
+        // Walk the first IFD, then the Exif IFD it points to, looking for tag 34855 (ISO).
+        fun scan(off: Int, depth: Int): Int {
+            if (off <= 0 || off + 2 > len || depth > 2) return 0
+            val count = u16(off)
+            var exifOff = 0
+            for (i in 0 until count) {
+                val e = off + 2 + i * 12
+                if (e + 12 > len) break
+                when (u16(e)) {
+                    34855 -> return u16(e + 8)          // ISO, SHORT in place
+                    34665 -> exifOff = u32(e + 8)       // Exif IFD pointer
+                }
+            }
+            return if (exifOff > 0) scan(exifOff, depth + 1) else 0
+        }
+        return scan(u32(4), 0)
     }
 
     /** A cached decode: the same photo at the same size is decoded only once. */
@@ -157,6 +202,20 @@ object Develop {
         printDiffusion = if (keep == "diffusion") r.printDiffusion else false,
         glare = if (keep == "glare") r.glare else false,
     )
+
+    /**
+     * Cleans colour noise in place before a render. Applied once per decoded source: the film
+     * should never see sensor blotches, because its dye couplers make them worse.
+     */
+    fun denoiseSource(source: Source, recipe: Recipe, iso: Int, log: (String) -> Unit = {}) {
+        if (source.denoised) return
+        val strength = if (recipe.chromaDenoise >= 0f) recipe.chromaDenoise else ChromaDenoise.strengthForIso(iso)
+        if (strength > 0.001f) {
+            log("cleaning colour noise")
+            ChromaDenoise.apply(source.image.data, source.width, source.height, strength)
+        }
+        source.denoised = true
+    }
 
     fun render(context: Context, source: Source, recipe: Recipe, preview: Boolean, log: (String) -> Unit = {}): Pair<ByteArray, Pair<Int, Int>> {
         val t = System.nanoTime()
@@ -276,131 +335,21 @@ object Develop {
      * @param maxEdge longest edge to decode; a small value for a quick look, 0 for full size.
      * Returns the saved image's uri. A new file is written every time; nothing is replaced.
      */
-    fun developDng(context: Context, dng: Uri, recipe: Recipe, maxEdge: Int = 0, log: (String) -> Unit = {}): Uri =
-        developDngTo(context, dng, recipe, maxEdge, log).let { (bytes, _) ->
-            save(context, bytes, baseNameOf(context, dng) + "_" + recipe.film.substringAfterLast('_') + ".jpg")
-        }
-
-    /** Develops and returns the JPEG bytes plus its size, without saving — used by the darkroom preview. */
-    fun developDngTo(context: Context, dng: Uri, recipe: Recipe, maxEdge: Int = 0, log: (String) -> Unit = {}): Pair<ByteArray, Pair<Int, Int>> {
-        val t0 = System.nanoTime()
-        log("decoding RAW…")
-        val settings = RawDecoder.Settings(maxLongEdge = maxEdge)
-        val decoded = context.contentResolver.openFileDescriptor(dng, "r")?.use {
-            RawDecoder.decodeToLinear(it.fd, settings)
-        } ?: error("could not open $dng")
-        val decodeMs = (System.nanoTime() - t0) / 1_000_000
-        log("decoded ${decoded.width}x${decoded.height} in ${decodeMs} ms · developing…")
-
-        val image = LinearImage(decoded.data, decoded.width, decoded.height, colorSpace = decoded.colorSpace,
-            onClose = { RawDecoder.freeOffHeap(it) })
-        val t1 = System.nanoTime()
-        var dims = 0 to 0
-        val jpeg = image.use { img ->
-            SpektraEngine.fromAssets(context.assets).use { engine ->
-                engine.simulate(img, sanitised(recipe).toParams()).use { result ->
-                    dims = result.width to result.height
-                    toJpeg(result.data, result.width, result.height, result.colorSpace)
-                }
-            }
-        }
-        val devMs = (System.nanoTime() - t1) / 1_000_000
-        log("developed in ${devMs} ms · ${jpeg.size / 1024} KB")
-        return jpeg to dims
-    }
-
     /**
-     * The engine returns display-referred FLOAT RGB (three floats per pixel, 0..1) in its output
-     * colour space — not bytes. Clamp, quantise to 8 bit, and tag the bitmap with that space so
-     * the system colour-manages it and embeds the right profile on export.
+     * Develop a RAW file and save the result. One path for every caller — auto-develop, the
+     * roll, and the darkroom's full-size button — so a fix here reaches all of them.
      */
-    private fun toJpeg(data: ByteBuffer, w: Int, h: Int, colorSpace: com.spectrafilm.engine.ColorSpace): ByteArray {
-        val f = data.order(ByteOrder.nativeOrder()).asFloatBuffer()
-        val bmp = taggedBitmap(w, h, colorSpace)
-        val bandRows = (1024 * 1024 / w).coerceIn(1, h)
-        val strip = IntArray(w * bandRows)
-        var y = 0
-        while (y < h) {
-            val rows = minOf(bandRows, h - y)
-            var k = 0
-            var i = y * w * 3
-            repeat(w * rows) {
-                val r = (f.get(i).coerceIn(0f, 1f) * 255f + 0.5f).toInt()
-                val g = (f.get(i + 1).coerceIn(0f, 1f) * 255f + 0.5f).toInt()
-                val b = (f.get(i + 2).coerceIn(0f, 1f) * 255f + 0.5f).toInt()
-                strip[k++] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-                i += 3
-            }
-            bmp.setPixels(strip, 0, w, 0, y, w, rows)
-            y += rows
-        }
-        val out = ByteArrayOutputStream()
-        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, out)
-        bmp.recycle()
-        return out.toByteArray()
-    }
-
-    /** Bitmap tagged with the engine's output colour space, falling back to sRGB. */
-    private fun taggedBitmap(w: Int, h: Int, cs: com.spectrafilm.engine.ColorSpace): android.graphics.Bitmap {
-        val named = when (cs) {
-            com.spectrafilm.engine.ColorSpace.SRGB -> android.graphics.ColorSpace.Named.SRGB
-            com.spectrafilm.engine.ColorSpace.ADOBE_RGB -> android.graphics.ColorSpace.Named.ADOBE_RGB
-            com.spectrafilm.engine.ColorSpace.PROPHOTO -> android.graphics.ColorSpace.Named.PRO_PHOTO_RGB
-            com.spectrafilm.engine.ColorSpace.REC2020 -> android.graphics.ColorSpace.Named.BT2020
-            com.spectrafilm.engine.ColorSpace.LINEAR_SRGB -> android.graphics.ColorSpace.Named.LINEAR_SRGB
-            else -> android.graphics.ColorSpace.Named.SRGB
-        }
-        return runCatching {
-            android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888, false, android.graphics.ColorSpace.get(named))
-        }.getOrElse { android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888) }
-    }
+    fun developDng(context: Context, dng: Uri, recipe: Recipe, maxEdge: Int = 0, log: (String) -> Unit = {}): Uri =
+        developFull(context, dng, isRaw = true, recipe = recipe, maxEdge = maxEdge, log = log)
 
     /**
      * Develop an already-processed image (a JPEG from the Xiaomi modes, or an imported photo).
      * The engine expects linear light, so the file is decoded and linearised first. This is film
      * applied over someone else's rendering — a look rather than a simulation.
      */
-    fun developJpeg(context: Context, image: Uri, recipe: Recipe, maxEdge: Int = 0, log: (String) -> Unit = {}): Uri {
-        val (bytes, _) = developJpegTo(context, image, recipe, maxEdge, log)
-        return save(context, bytes, baseNameOf(context, image) + "_" + recipe.film.substringAfterLast('_') + ".jpg")
-    }
-
-    fun developJpegTo(context: Context, image: Uri, recipe: Recipe, maxEdge: Int = 0, log: (String) -> Unit = {}): Pair<ByteArray, Pair<Int, Int>> {
-        log("reading image…")
-        val src = context.contentResolver.openInputStream(image)?.use { android.graphics.BitmapFactory.decodeStream(it) }
-            ?: error("could not open $image")
-        val scale = if (maxEdge > 0) minOf(1f, maxEdge.toFloat() / maxOf(src.width, src.height)) else 1f
-        val bmp = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(src, (src.width * scale).toInt(), (src.height * scale).toInt(), true) else src
-        val w = bmp.width; val h = bmp.height
-        log("linearising ${w}x$h…")
-        val buf = ByteBuffer.allocateDirect(w * h * 3 * 4).order(ByteOrder.nativeOrder())
-        val f = buf.asFloatBuffer()
-        val row = IntArray(w)
-        val lut2 = FloatArray(256) { i ->
-            val c = i / 255f
-            if (c <= 0.04045f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
-        }
-        for (y in 0 until h) {
-            bmp.getPixels(row, 0, w, 0, y, w, 1)
-            for (x in 0 until w) {
-                val p = row[x]
-                val r = lut2[(p shr 16) and 0xFF]; val g = lut2[(p shr 8) and 0xFF]; val b = lut2[p and 0xFF]
-                f.put(0.5294f * r + 0.3300f * g + 0.1406f * b)
-                f.put(0.0983f * r + 0.8735f * g + 0.0282f * b)
-                f.put(0.0168f * r + 0.1178f * g + 0.8654f * b)
-            }
-        }
-        if (bmp !== src) bmp.recycle()
-        src.recycle()
-        log("developing…")
-        var dims = 0 to 0
-        val jpeg = LinearImage(buf, w, h, colorSpace = "ProPhoto RGB").use { img ->
-            SpektraEngine.fromAssets(context.assets).use { engine ->
-                engine.simulate(img, sanitised(recipe).toParams()).use { r -> dims = r.width to r.height; toJpeg(r.data, r.width, r.height, r.colorSpace) }
-            }
-        }
-        return jpeg to dims
-    }
+    /** Film over an already-processed image (the Xiaomi modes, or an import). */
+    fun developJpeg(context: Context, image: Uri, recipe: Recipe, maxEdge: Int = 0, log: (String) -> Unit = {}): Uri =
+        developFull(context, image, isRaw = false, recipe = recipe, maxEdge = maxEdge, log = log)
 
     private fun baseNameOf(context: Context, uri: Uri): String {
         val name = context.contentResolver.query(uri, arrayOf(MediaStore.Images.Media.DISPLAY_NAME), null, null, null)
@@ -424,10 +373,11 @@ object Develop {
         )?.use { it.count > 0 } ?: false
 
     /** Full-resolution develop with progress, logging and a new file each time. */
-    fun developFull(context: Context, source: Uri, isRaw: Boolean, recipe: Recipe, log: (String) -> Unit = {}): Uri {
-        log("decoding at full size…")
-        val src = if (isRaw) openRaw(context, source, 0, log) else openImage(context, source, 0)
+    fun developFull(context: Context, source: Uri, isRaw: Boolean, recipe: Recipe, maxEdge: Int = 0, log: (String) -> Unit = {}): Uri {
+        log(if (maxEdge > 0) "decoding…" else "decoding at full size…")
+        val src = if (isRaw) openRaw(context, source, maxEdge, log) else openImage(context, source, maxEdge)
         return src.use { s ->
+            denoiseSource(s, recipe, isoOf(context, source), log)
             log("developing ${s.width}×${s.height}…")
             val (bytes, dims) = render(context, s, recipe, preview = false, log = log)
             log("saving ${dims.first}×${dims.second}, ${bytes.size / 1024} KB")
