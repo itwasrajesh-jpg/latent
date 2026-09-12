@@ -118,7 +118,6 @@ private fun Root() {
             onOpenProbe = { screen = "probe" },
             onOpenLogs = { screen = "logs" },
             onOpenExtension = { screen = "extension" },
-            onOpenDevelop = { screen = "develop" },
             onBack = { screen = "camera" },
         )
         "roll" -> RollScreen(
@@ -134,7 +133,6 @@ private fun Root() {
                 onBack = { screen = "roll" },
             )
         } ?: run { screen = "roll" }
-        "develop" -> DevelopScreen(onBack = { screen = "settings" })
         "extension" -> if (android.os.Build.VERSION.SDK_INT >= 31) ExtensionScreen(
             settings = settings,
             onSettingsChange = { s -> settings = s; AppSettings.save(context, s) },

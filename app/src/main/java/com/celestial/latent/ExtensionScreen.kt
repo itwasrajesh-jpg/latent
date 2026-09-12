@@ -277,7 +277,7 @@ fun ExtensionScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Un
             it.onSaved = { uri ->
                 Thread { val b = runCatching { context.contentResolver.loadThumbnail(uri, android.util.Size(192, 192), null) }.getOrNull(); if (b != null) { thumb = b; lastUri = uri } }.start()
                 // Xiaomi's modes hand us a finished JPEG: film goes over their rendering, not over RAW.
-                if (settings.autoDevelop) com.celestial.latent.develop.DevelopQueue.submit(context, com.celestial.latent.develop.DevelopQueue.Job(uri, settings.film, isRaw = false))
+                if (settings.autoDevelop) com.celestial.latent.develop.DevelopQueue.submit(context, com.celestial.latent.develop.DevelopQueue.Job(uri, com.celestial.latent.develop.Recipes.current(context).copy(film = settings.film), isRaw = false))
             }
         }
     }
