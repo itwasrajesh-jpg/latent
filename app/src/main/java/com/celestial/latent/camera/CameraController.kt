@@ -82,6 +82,8 @@ class CameraController(
     @Volatile var betterJpeg = false
     @Volatile var ultraHdrJpeg = false
     private var jpegIsUltraHdr = false
+    /** Set once a JPEG_R session has failed on this device: RAW + Ultra HDR + preview is not a supported combination. */
+    private var ultraHdrUnsupported = false
     /** Android's JPEG_R format (Ultra HDR, base JPEG + gain map). Constant kept literal for older compile targets. */
     private val FORMAT_JPEG_R = 4101
     private val MFNR_KEY = "org.codeaurora.qcamera3.sessionParameters.enableMFNR"
@@ -156,11 +158,13 @@ class CameraController(
                 rawReader = ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 6).also {
                     it.setOnImageAvailableListener({ r -> onRawImage(r) }, handler)
                 }
-                jpegIsUltraHdr = ultraHdrJpeg && Build.VERSION.SDK_INT >= 34 &&
+                jpegIsUltraHdr = ultraHdrJpeg && !ultraHdrUnsupported && Build.VERSION.SDK_INT >= 34 &&
                 map.outputFormats.contains(FORMAT_JPEG_R) && (map.getOutputSizes(FORMAT_JPEG_R)?.isNotEmpty() == true)
             jpegReader = if (saveJpeg) {
                 val fmt = if (jpegIsUltraHdr) FORMAT_JPEG_R else ImageFormat.JPEG
-                val jpegSize = map.getOutputSizes(fmt)?.maxByOrNull { it.width.toLong() * it.height } ?: rawSize
+                val allSizes = map.getOutputSizes(fmt)?.toList().orEmpty()
+                val sameAspect = allSizes.filter { Math.abs(it.width.toFloat() / it.height - rawSize.width.toFloat() / rawSize.height) < 0.02f }
+                val jpegSize = (sameAspect.ifEmpty { allSizes }).maxByOrNull { it.width.toLong() * it.height } ?: rawSize
                 log("JPEG stream: " + (if (jpegIsUltraHdr) "JPEG_R (Ultra HDR)" else "JPEG") + " ${jpegSize.width}x${jpegSize.height}" +
                     (if (ultraHdrJpeg && !jpegIsUltraHdr) " · Ultra HDR requested but JPEG_R not offered here" else ""))
                 ImageReader.newInstance(jpegSize.width, jpegSize.height, fmt, 4).also {
@@ -173,7 +177,16 @@ class CameraController(
                 cm.openCamera(idToOpen, object : CameraDevice.StateCallback() {
                     override fun onOpened(cam: CameraDevice) { log("opened camera $idToOpen for lens ${lens.physicalId}${if (directOpen) " (direct)" else ""}"); device = cam; createSession() }
                     override fun onDisconnected(cam: CameraDevice) { log("camera disconnected (background or another app took it)"); try { session?.close() } catch (_: Exception) {}; session = null; cam.close(); device = null }
-                    override fun onError(cam: CameraDevice, error: Int) { status("Camera error $error"); cam.close(); device = null }
+                    override fun onError(cam: CameraDevice, error: Int) {
+                        cam.close(); device = null
+                        if (jpegIsUltraHdr) {
+                            // RAW + JPEG_R + preview is not a supported stream combination here.
+                            ultraHdrUnsupported = true
+                            log("camera error $error with a JPEG_R stream; Ultra HDR cannot run alongside RAW on this camera — falling back to plain JPEG")
+                            status("Ultra HDR needs to be off while shooting RAW on this phone — using plain JPEG")
+                            handler.postDelayed({ previewSurface?.let { open(lens, it) } }, 600)
+                        } else status("Camera error $error")
+                    }
                 }, handler)
             } catch (e: Exception) {
                 // Typically the camera service restarting after a driver crash: IDs vanish for a moment.
