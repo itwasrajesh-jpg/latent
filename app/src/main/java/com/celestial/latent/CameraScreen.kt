@@ -261,6 +261,10 @@ fun CameraScreen(
                             controller.log("viewfinder: film preview path")
                             controller.open(lens, surf)
                         }
+                        onUnavailable = { why ->
+                            controller.log("viewfinder: $why — using the plain preview")
+                            onSettingsChange(settings.copy(filmPreview = false))
+                        }
                         glPreview = this
                     }
                 }, update = { view ->

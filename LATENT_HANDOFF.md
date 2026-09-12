@@ -1,6 +1,6 @@
 # LATENT — Master Handoff
 
-*Film camera for Android by Celestial. State as of 12 Sep 2026 (app step 7b, engine patch pending).*
+*Film camera for Android by Celestial. State as of 12 Sep 2026 (app step 8a; engine patch written, not yet uploaded).*
 *Purpose: everything a fresh session needs. Paste this at the start of a new conversation.*
 
 ---
@@ -77,6 +77,19 @@ parity; and never claim the parity gate passed without running it.
   12.5 MP. It is already multithreaded. Everything else is seconds. Previews therefore drop
   the spatial stages (grain, halation, diffusion, glare) unless that tab is open.
 - Known cost profile: 800 px preview ≈ 300–500 ms; full 12.5 MP ≈ 10–20 s without diffusion.
+- **Diffusion is the one expensive stage**, and the port has already measured it: a scene with
+  halation + diffusion at 0.8 took 49.2 s → 13.4 s after they parallelised it, on a 4-core
+  desktop at 3 MP. Minutes at 12.5 MP on a phone is expected, not a bug. Previews therefore drop
+  the spatial stages unless that tab is open, and the UI warns before a slow export.
+- **The film look is not tied to any colour space.** The simulation works in 81 spectral bands
+  and dye density; only the final scan stage converts to RGB, with correct per-space matrices,
+  CAT02 adaptation and encoding curves. sRGB output is authentic for viewing; ProPhoto/ACES are
+  for onward grading and band in an 8-bit JPEG.
+- **Exposure looks like it does nothing on the print route** — by design. `print_exposure_compensation`
+  and `normalize_print_exposure` (both on by default in the engine) recompute the enlarger exposure
+  from the film exposure, exactly as a printer would. Film exposure changes where the negative sits
+  on the curve (contrast, crossover), not print brightness. Brightness on the print route is
+  **Print exposure**. Those two switches are not yet exposed in the app — TODO.
 - GPU (Vulkan) covers the **scan stage only** and is **preview-only by the engine's own rule**
   (its float maths is not bit-reproducible across vendors, so export and the parity path must
   stay CPU). The app therefore exposes a GPU *preview* switch only, and `Develop.render` forces
@@ -112,19 +125,62 @@ app/src/main/java/com/celestial/latent/
   camera/*.kt          Camera2 controller, controls, lens table, alignment, DNG writer, report, probe
 ```
 
-## 6. Open items
+## 6. Where things stand, and what is planned
 
-- Engine patch not yet committed to the mirror; `ENGINE_REF` still points at upstream.
-- Live film preview in the viewfinder (bake a LUT, GPU shader) — designed, not built.
-- Diffusion speed-up — reconsidered after reading `spectrafilm-dev`: float32 would break
-  bit-exactness with the oracle, so by their rules it must be opt-in and default OFF, and any
-  C++ change needs their host-parity suite run. The safer subset (mirror symmetry, negligible-tail
-  trim, cache-friendly ordering) is arithmetically identical but still needs the gate. Treat this
-  as "patch + run their tests", not a small change.
-- Latent Looks (own digital looks, HALD import of Lightroom presets) — planned.
-- Own depth-based bokeh — planned, after the above.
-- Lens discovery is still hard-coded to the 15 Ultra's IDs; a Pixel shows the wrong chips.
-- Freeze-frame preview (real engine render of the current frame) — idea, not built.
+### Done and shipped (app steps 1 → 8a)
+Camera, burst + alignment, Xiaomi extensions, engine integration, auto-develop, roll, darkroom
+with the full parameter surface, film↔paper pairing, About/credits, cancellable developing,
+per-lens vendor codes, GPU export removed (engine rule), and — in 8a — the viewfinder drawn by
+the app itself, ready to carry a film look.
+
+### Immediately open
+1. **Engine patch not uploaded.** `engine-diffusion-family.zip` passes the diffusion filter family
+   through the C API. Until it is committed to the mirror and `ENGINE_REF` updated, Glimmerglass /
+   Pro-Mist / Cinebloom are decorative — the engine always renders Black Pro-Mist. Either upload it
+   or grey those three out.
+2. **Move `ENGINE_REF` forward.** The pin is 28 Aug; upstream committed as recently as 12 Sep. A
+   free update, possibly including GPU work.
+3. **8b — the film look in the viewfinder.** 8a built the path with a neutral table; 8b bakes the
+   table from the current recipe (`bakeCubeLut`) and applies the engine's own exposure gain
+   (`meterExposureEv`), so the live view matches what develops. Live view carries colour and tone
+   only; grain, halation and diffusion arrive on development, and the caption says so.
+4. **Print exposure compensation switches** in the ENLARGER tab (see §4), so film exposure can be
+   made to change brightness.
+
+### Planned, in rough order
+- **Film look builder from an uploaded JPEG** — the project's most distinctive idea. Measure a
+  numerical *fingerprint* of a reference image's look (shadow level, contrast roll-off, grey lean,
+  saturation vs brightness, skin and sky behaviour) rather than comparing pixel to pixel, then
+  search inside the film physics — film, paper, exposure, contrast, push, filtration, couplers —
+  for the closest recipe, trialling at postcard size with the spatial stages off. Because profiles
+  are curve data, the search can **interpolate between films**, so the answer can be a new emulsion
+  (e.g. 62% Portra 400 + 38% Vision3 250T on Supra Endura) that the user names and tunes. Honest
+  limits: some looks are outside film's reach — report a match percentage; black and white needs a
+  monochrome profile path, since blending colour films only desaturates; generated profiles are
+  CC BY-SA 4.0 derivatives and must be named as Celestial stocks, never as Kodak/Fuji/Leica
+  products. **First step: build the fingerprint measurement alone** and show it across several
+  films, to check the numbers separate looks the way the eye does.
+- **Lens discovery** — the lens table is hard-coded to this phone's IDs; a Pixel shows wrong chips.
+  Derive lenses from the characteristics (focal length, sensor size → 35 mm equivalent) at startup.
+- **Colour tab polish** — add Display P3 (the phone's own screen) and Rec.709 with the video curve;
+  label each option by what it is *for*; keep gamut compression labelled as the look control it is.
+- **Film preview in the Xiaomi Portrait/Night modes** — deliberately deferred.
+- **Freeze-frame preview** — render the current frame through the real engine at low resolution,
+  so grain and halation can be judged before shooting.
+- **Latent Looks + HALD import** of Lightroom presets.
+- **Own depth-based bokeh** (Depth Anything-class model + segmentation + our own blur in linear
+  light), which works on RAW and on any lens, unlike Xiaomi's.
+
+### Decided against, with reasons
+- **A GPU port of the engine.** The port already ships a Vulkan host and the scan-stage shaders;
+  the author has the expose/print kernels on his roadmap with test tooling (`tools/gpu_probe`), and
+  both his repo and vkdt had commits on 12 Sep. Duplicating it would likely be wasted effort —
+  move the pin forward instead, and contribute upstream if the itch persists. vkdt's filmsim
+  (GPLv3, fp32, 41 bands) is the legal, sanctioned shader seed if it is ever attempted.
+- **Diffusion micro-optimisation in C++** — float32 would break bit-exactness with the oracle, so
+  by the engine's rules it must be opt-in and default off, and any change needs their host-parity
+  suite run. Not a small patch.
+- **Ultra HDR**, **DCG / staggered HDR / MFHDR / snapshot HDR / MFNR** — measured dead, removed.
 
 ## 7. Testing habits that work
 

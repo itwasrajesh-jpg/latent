@@ -23,6 +23,9 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
     /** Called once the camera can start: gives the Surface to draw camera frames into. */
     var onSurfaceReady: ((Surface, SurfaceTexture) -> Unit)? = null
 
+    /** Called if the shader could not be built, so the screen can fall back to the plain preview. */
+    var onUnavailable: ((String) -> Unit)? = null
+
     private val renderer = FilmRenderer()
 
     init {
@@ -62,6 +65,7 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
         @Volatile var exposureGain = 1f
         private var lutTexture = 0
         private var lutSize = 0
+        private var reportedError = false
 
         fun setBufferSize(w: Int, h: Int) {
             bufW = w; bufH = h
@@ -74,7 +78,9 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             release()
             lutTexture = 0
             lutSize = 0
+            reportedError = false
             program = buildProgram(VERTEX_SHADER, FRAGMENT_SHADER)
+            if (program == 0) { post { onUnavailable?.invoke("the film preview shader could not be built") }; return }
             val ids = IntArray(1)
             GLES20.glGenTextures(1, ids, 0)
             texture = ids[0]
@@ -133,6 +139,12 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             }
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+            if (!reportedError) {
+                val e = GLES20.glGetError()
+                reportedError = true
+                if (e != GLES20.GL_NO_ERROR) Log.e("Latent", "film preview: GL error 0x${Integer.toHexString(e)} on the first frame")
+                else Log.i("Latent", "film preview: first frame drawn cleanly (${viewW}x$viewH)")
+            }
             GLES20.glDisableVertexAttribArray(pos)
             GLES20.glDisableVertexAttribArray(uv)
         }
@@ -171,20 +183,38 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
         }
     }
 
+    /** Builds the program, reporting exactly why if it fails. Returns 0 on failure. */
     private fun buildProgram(vs: String, fs: String): Int {
-        fun compile(type: Int, src: String): Int {
+        fun compile(type: Int, src: String, label: String): Int {
             val id = GLES20.glCreateShader(type)
             GLES20.glShaderSource(id, src)
             GLES20.glCompileShader(id)
             val ok = IntArray(1)
             GLES20.glGetShaderiv(id, GLES20.GL_COMPILE_STATUS, ok, 0)
-            if (ok[0] == 0) Log.e("Latent", "film preview: shader failed — " + GLES20.glGetShaderInfoLog(id))
+            val info = GLES20.glGetShaderInfoLog(id)
+            if (ok[0] == 0) {
+                Log.e("Latent", "film preview: $label shader did not compile — ${info.trim()}")
+                GLES20.glDeleteShader(id)
+                return 0
+            }
+            if (info.isNotBlank()) Log.i("Latent", "film preview: $label shader note — ${info.trim()}")
             return id
         }
+        val v = compile(GLES20.GL_VERTEX_SHADER, vs, "vertex")
+        val f = compile(GLES20.GL_FRAGMENT_SHADER, fs, "fragment")
+        if (v == 0 || f == 0) return 0
         val p = GLES20.glCreateProgram()
-        GLES20.glAttachShader(p, compile(GLES20.GL_VERTEX_SHADER, vs))
-        GLES20.glAttachShader(p, compile(GLES20.GL_FRAGMENT_SHADER, fs))
+        GLES20.glAttachShader(p, v)
+        GLES20.glAttachShader(p, f)
         GLES20.glLinkProgram(p)
+        val linked = IntArray(1)
+        GLES20.glGetProgramiv(p, GLES20.GL_LINK_STATUS, linked, 0)
+        if (linked[0] == 0) {
+            Log.e("Latent", "film preview: program did not link — ${GLES20.glGetProgramInfoLog(p).trim()}")
+            GLES20.glDeleteProgram(p)
+            return 0
+        }
+        Log.i("Latent", "film preview: shader program ready")
         return p
     }
 
@@ -208,15 +238,14 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
 
         // With uHasLut = 0 this is a straight copy of the camera image: the check that the
         // new preview path is correct before any film look is applied.
-        private const val FRAGMENT_SHADER = """
-            #extension GL_OES_EGL_image_external : require
-            precision mediump float;
-            varying vec2 vUv;
-            uniform samplerExternalOES uCamera;
-            uniform sampler2D uLut;
-            uniform float uLutSize;
-            uniform float uGain;
-            uniform int uHasLut;
+        private const val FRAGMENT_SHADER = """#extension GL_OES_EGL_image_external : require
+precision mediump float;
+varying vec2 vUv;
+uniform samplerExternalOES uCamera;
+uniform sampler2D uLut;
+uniform float uLutSize;
+uniform float uGain;
+uniform int uHasLut;
 
             vec3 lookup(vec3 c) {
                 float n = uLutSize;
