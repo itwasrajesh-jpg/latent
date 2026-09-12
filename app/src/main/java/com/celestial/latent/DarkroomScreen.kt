@@ -374,8 +374,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                         S("Spectral blur", recipe.spectralBlur, 0f, 20f, "%.1f") { set { copy(spectralBlur = it) } }
                         S("Preview size", recipe.previewMaxSize.toFloat(), 300f, 1600f, "%.0f px") { set { copy(previewMaxSize = Math.round(it)) } }
                         Toggle("GPU preview (experimental)", recipe.gpuPreview) { set { copy(gpuPreview = it) } }
-                        Toggle("GPU export (experimental)", recipe.gpuExport) { set { copy(gpuExport = it) } }
-                        Note("GPU speeds up the scan stage only; the spectral work stays on the CPU. Both paths self-check against the CPU engine on this device and fall back if they disagree.")
+                        Note("GPU is for previews only, by the engine's design: its maths is not identical across chip makers, so exports stay on the CPU. It covers the scan stage, and self-checks against the CPU on this device before it is used.")
                         Text(if (gpuTest.isEmpty()) "Measure GPU vs CPU" else gpuTest, color = LatentColors.AmberInk, fontSize = 11.sp,
                             modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).combinedClickable(onClick = {
                                 val busy = com.celestial.latent.develop.DevelopQueue.queued > 0
@@ -390,8 +389,8 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                                         try {
                                             val s0 = src ?: Develop.openCached(context, source, isRaw, DECODE_EDGE)
                                             var cpu = 0L; var gpu = 0L
-                                            run { val t = System.nanoTime(); Develop.render(context, s0, r.copy(gpuPreview = false, gpuExport = false), preview = true); cpu = (System.nanoTime() - t) / 1_000_000 }
-                                            run { val t = System.nanoTime(); Develop.render(context, s0, r.copy(gpuPreview = true, gpuExport = true), preview = true); gpu = (System.nanoTime() - t) / 1_000_000 }
+                                            run { val t = System.nanoTime(); Develop.render(context, s0, r.copy(gpuPreview = false), preview = true); cpu = (System.nanoTime() - t) / 1_000_000 }
+                                            run { val t = System.nanoTime(); Develop.render(context, s0, r.copy(gpuPreview = true), preview = true); gpu = (System.nanoTime() - t) / 1_000_000 }
                                             gpuTest = "CPU ${cpu} ms · GPU ${gpu} ms" + if (gpu < cpu * 0.9) " — GPU is faster" else if (gpu > cpu * 1.1) " — GPU is slower" else " — no difference"
                                             android.util.Log.i("Latent", "gpu comparison: cpu=${cpu}ms gpu=${gpu}ms")
                                         } catch (t: Throwable) { gpuTest = "failed: ${t.message}" }

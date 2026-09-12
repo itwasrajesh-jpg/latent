@@ -160,16 +160,17 @@ object Develop {
 
     fun render(context: Context, source: Source, recipe: Recipe, preview: Boolean, log: (String) -> Unit = {}): Pair<ByteArray, Pair<Int, Int>> {
         val t = System.nanoTime()
-        Log.i("Latent", "render start: source ${source.width}x${source.height}, preview=$preview, cap=${recipe.previewMaxSize}, film=${recipe.film}, gpu=${recipe.gpuPreview}/${recipe.gpuExport}")
+        Log.i("Latent", "render start: source ${source.width}x${source.height}, preview=$preview, cap=${recipe.previewMaxSize}, film=${recipe.film}, gpuPreview=${preview && recipe.gpuPreview}")
         var dims = 0 to 0
-        val params = sanitised(recipe).toParams()
+        // GPU is preview-only: a full render always goes through the CPU engine.
+        val params = sanitised(if (preview) recipe else recipe.copy(gpuPreview = false)).toParams()
         val jpeg = SpektraEngine.fromAssets(context.assets).use { engine ->
             val result = if (preview) engine.simulatePreview(source.image, params) else engine.simulate(source.image, params)
             result.use { r -> dims = r.width to r.height; toJpeg(r.data, r.width, r.height, r.colorSpace) }
         }
         Log.i("Latent", "render done: ${dims.first}x${dims.second} in ${(System.nanoTime() - t) / 1_000_000} ms")
         log((if (preview) "preview" else "full") + " ${dims.first}×${dims.second} in ${(System.nanoTime() - t) / 1_000_000} ms" +
-            (if (recipe.gpuPreview || recipe.gpuExport) " · GPU requested" else ""))
+            (if (preview && recipe.gpuPreview) " · GPU preview requested" else ""))
         return jpeg to dims
     }
 

@@ -105,8 +105,9 @@ data class Recipe(
     // Engine
     val rgbToRaw: String = "HANATOS2025",
     val spectralBlur: Float = 0f,
+    // GPU is preview-only by the engine's own rule: its float maths is not bit-reproducible
+    // across vendors, so export and the parity path stay on the CPU.
     val gpuPreview: Boolean = false,
-    val gpuExport: Boolean = false,
     val previewMaxSize: Int = 900,   // the engine's own preview fast-path target
 ) {
     /** Build the engine's parameter tree from this recipe. */
@@ -160,7 +161,7 @@ data class Recipe(
         settings = SettingsParams(
             rgbToRawMethod = runCatching { Rgb2Raw.valueOf(rgbToRaw) }.getOrDefault(Rgb2Raw.HANATOS2025),
             spectralGaussianBlur = spectralBlur,
-            gpuPreview = gpuPreview, gpuExport = gpuExport,
+            gpuPreview = gpuPreview, gpuExport = false,
             previewMaxSize = previewMaxSize,
         ),
     )
@@ -191,7 +192,7 @@ data class Recipe(
         put("scannerLensBlur", scannerLensBlur.toDouble()); put("scanFilm", scanFilm)
         put("glare", glare); put("glarePercent", glarePercent.toDouble()); put("glareRoughness", glareRoughness.toDouble()); put("glareBlur", glareBlur.toDouble())
         put("outputColorSpace", outputColorSpace); put("outputGamutCompress", outputGamutCompress); put("inputGamutCompress", inputGamutCompress)
-        put("rgbToRaw", rgbToRaw); put("spectralBlur", spectralBlur.toDouble()); put("gpuPreview", gpuPreview); put("gpuExport", gpuExport); put("previewMaxSize", previewMaxSize)
+        put("rgbToRaw", rgbToRaw); put("spectralBlur", spectralBlur.toDouble()); put("gpuPreview", gpuPreview); put("previewMaxSize", previewMaxSize)
     }.toString()
 
     companion object {
@@ -234,7 +235,7 @@ data class Recipe(
                 outputGamutCompress = o.optString("outputGamutCompress", d.outputGamutCompress),
                 inputGamutCompress = o.optString("inputGamutCompress", d.inputGamutCompress),
                 rgbToRaw = o.optString("rgbToRaw", d.rgbToRaw), spectralBlur = f("spectralBlur", d.spectralBlur),
-                gpuPreview = o.optBoolean("gpuPreview", d.gpuPreview), gpuExport = o.optBoolean("gpuExport", d.gpuExport),
+                gpuPreview = o.optBoolean("gpuPreview", d.gpuPreview),
                 previewMaxSize = o.optInt("previewMaxSize", d.previewMaxSize),
             )
         } catch (t: Throwable) { Recipe() }

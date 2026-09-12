@@ -50,6 +50,15 @@ Required attribution under GPLv3 §7(b), both lines, clickable, in the About scr
 
 ## 4. Engine facts
 
+**The port ships `.claude/skills`, including `spectrafilm-dev` — read it before touching the
+C++.** Its hard laws: parity with the Python oracle is the prime directive (max_abs ≤ 1e-4,
+rms ≤ 1e-5, byte-identical across thread counts); any change under
+`engine/spektra-core/src/main/cpp/**` must keep the host-parity suite green before it is done;
+non-parity behaviour must default OFF; NDK r27 / CMake 3.22.1 / JDK 21 are hard pins;
+`-fno-finite-math-only` must never be stripped (the scan stage relies on NaN propagation);
+stochastic stages need fixed seeds; thread-invariance is mandatory; GPU never routes export or
+parity; and never claim the parity gate passed without running it.
+
 - `engine:spektra-core` (C++ + Kotlin facade) and `lib:libraw`, fetched from the mirror.
 - API used: `simulate`, `simulatePreview` (the only path honouring the GPU preview flag),
   `bakeCubeLut`, `meterExposureEv`, `listProfiles`.
@@ -68,8 +77,12 @@ Required attribution under GPLv3 §7(b), both lines, clickable, in the About scr
   12.5 MP. It is already multithreaded. Everything else is seconds. Previews therefore drop
   the spatial stages (grain, halation, diffusion, glare) unless that tab is open.
 - Known cost profile: 800 px preview ≈ 300–500 ms; full 12.5 MP ≈ 10–20 s without diffusion.
-- GPU (Vulkan) covers the **scan stage only**; measurements so far were taken on a throttled
-  phone and are inconclusive. A guarded "Measure GPU vs CPU" button exists in the ENGINE tab.
+- GPU (Vulkan) covers the **scan stage only** and is **preview-only by the engine's own rule**
+  (its float maths is not bit-reproducible across vendors, so export and the parity path must
+  stay CPU). The app therefore exposes a GPU *preview* switch only, and `Develop.render` forces
+  it off for full renders. Do not re-add a GPU export option. Measurements so far were taken on
+  a throttled phone and are inconclusive; a guarded "Measure GPU vs CPU" button is in the
+  ENGINE tab.
 - **Local engine change (pending upload)**: the diffusion filter *family* was fixed to
   black_pro_mist in the C API, so Glimmerglass / Pro-Mist / Cinebloom were silently ignored.
   Patch bundle `engine-diffusion-family.zip` adds the field to `spektra.h`, honours it in
@@ -103,8 +116,11 @@ app/src/main/java/com/celestial/latent/
 
 - Engine patch not yet committed to the mirror; `ENGINE_REF` still points at upstream.
 - Live film preview in the viewfinder (bake a LUT, GPU shader) — designed, not built.
-- Diffusion speed-up (identical-output only: float32, mirror symmetry, tail trim, cache-friendly
-  order) — agreed, not written.
+- Diffusion speed-up — reconsidered after reading `spectrafilm-dev`: float32 would break
+  bit-exactness with the oracle, so by their rules it must be opt-in and default OFF, and any
+  C++ change needs their host-parity suite run. The safer subset (mirror symmetry, negligible-tail
+  trim, cache-friendly ordering) is arithmetically identical but still needs the gate. Treat this
+  as "patch + run their tests", not a small change.
 - Latent Looks (own digital looks, HALD import of Lightroom presets) — planned.
 - Own depth-based bokeh — planned, after the above.
 - Lens discovery is still hard-coded to the 15 Ultra's IDs; a Pixel shows the wrong chips.
