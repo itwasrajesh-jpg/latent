@@ -55,7 +55,7 @@ import com.celestial.latent.develop.Recipes
 import com.celestial.latent.ui.LatentColors
 import kotlinx.coroutines.delay
 
-private const val PREVIEW_EDGE = 1400
+private const val PREVIEW_EDGE = 900
 
 private val TABS = listOf(
     "film" to "FILM", "halation" to "HALATION", "grain" to "GRAIN", "diffusion" to "DIFFUSION",
@@ -102,9 +102,12 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
         }.start()
     }
 
-    LaunchedEffect(Unit) { render() }
-    // Coalesce slider movement: re-render shortly after the last change.
-    LaunchedEffect(recipe) { delay(350); onRecipeChanged(recipe); Recipes.setCurrent(context, recipe); render() }
+    // First render, then re-render shortly after the last control change.
+    LaunchedEffect(recipe) {
+        delay(300)
+        onRecipeChanged(recipe); Recipes.setCurrent(context, recipe)
+        render()
+    }
 
     fun set(block: Recipe.() -> Recipe) { recipe = recipe.block() }
 
@@ -123,7 +126,8 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
         }
 
         // Photo shrinks as the sheet is dragged up; it never disappears entirely.
-        val photoWeight = when (sheet) { 0 -> 1f; 1 -> 0.45f; else -> 0.18f }
+        // The sheet always keeps room; dragging shifts how much.
+        val photoWeight = when (sheet) { 0 -> 0.58f; 1 -> 0.38f; else -> 0.18f }
         Box(Modifier.fillMaxWidth().weight(photoWeight).background(LatentColors.Surface).pointerInput(Unit) {
             detectTapGestures(onPress = {
                 comparing = true
@@ -136,6 +140,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
             val shown = if (comparing) (original ?: preview) else preview
             shown?.let { Image(it.asImageBitmap(), contentDescription = "Developed", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
             if (rendering) Text("DEVELOPING…", color = LatentColors.Amber, fontSize = 10.sp, letterSpacing = 2.sp, modifier = Modifier.align(Alignment.TopEnd).padding(10.dp))
+            if (!rendering && preview == null) Text(if (status.isEmpty()) "no preview yet" else status, color = LatentColors.Text, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp))
             Text(if (comparing) "ORIGINAL" else (Develop.FILMS.firstOrNull { it.first == recipe.film }?.second?.uppercase() ?: recipe.film),
                 color = Color(0xCCFFFFFF), fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(10.dp))
             if (sheet == 0) Text("HOLD TO COMPARE", color = Color(0x99FFFFFF), fontSize = 9.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp))
@@ -143,7 +148,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
 
         // The sheet: drag the handle to give the controls more room.
         Column(
-            Modifier.fillMaxWidth().weight(1f - photoWeight + 0.0001f).clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)).background(Color(0xFF1D1D1B))
+            Modifier.fillMaxWidth().weight(1f - photoWeight).clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)).background(Color(0xFF1D1D1B))
                 .pointerInput(Unit) {
                     detectVerticalDragGestures { _, dy ->
                         if (dy < -12f && sheet < 2) { Haptics.tick(context); sheet++ }
@@ -153,6 +158,15 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
         ) {
             Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp), contentAlignment = Alignment.Center) {
                 Box(Modifier.size(34.dp, 4.dp).clip(RoundedCornerShape(2.dp)).background(if (sheet > 0) LatentColors.Amber else LatentColors.Line))
+            }
+            // Film chips: always reachable, whatever tab is open.
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Develop.FILMS.forEach { (id, label) ->
+                    val on = id == recipe.film
+                    Text(label.uppercase(), color = if (on) LatentColors.AmberInk else LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp,
+                        modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (on) LatentColors.Amber else LatentColors.Surface)
+                            .combinedClickable(onClick = { Haptics.tick(context); set { copy(film = id) } }).padding(horizontal = 11.dp, vertical = 7.dp))
+                }
             }
             // Tabs
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -168,14 +182,6 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp)) {
                 when (tab) {
                     "film" -> {
-                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Develop.FILMS.forEach { (id, label) ->
-                                val on = id == recipe.film
-                                Text(label.uppercase(), color = if (on) LatentColors.AmberInk else LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp,
-                                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (on) LatentColors.Amber else LatentColors.Surface)
-                                        .combinedClickable(onClick = { Haptics.tick(context); set { copy(film = id) } }).padding(horizontal = 11.dp, vertical = 7.dp))
-                            }
-                        }
                         S("Exposure", recipe.exposureEv, -3f, 3f, "%+.1f EV") { set { copy(exposureEv = it) } }
                         S("Push / pull", recipe.pushStops, -2f, 3f, "%+.1f stop") { set { copy(pushStops = it) } }
                         S("Film contrast", recipe.filmContrast, 0.6f, 1.6f, "%.2f") { set { copy(filmContrast = it) } }
