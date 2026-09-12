@@ -11,7 +11,7 @@ data class VendorTag(val name: String, val scope: String, val type: String, val 
             val p = s.split("\t")
             return when (p.size) {
                 5 -> VendorTag(p[0], p[1], p[2], p[3], p[4])
-                4 -> VendorTag(p[0], p[1], p[2], p[3])   // entries saved before tags were per-lens
+                4 -> VendorTag(p[0], p[1], p[2], p[3], "all")   // entries saved before codes were per-lens
                 else -> null
             }
         }
