@@ -2,6 +2,13 @@ package com.celestial.latent.develop
 
 import android.content.Context
 import com.spectrafilm.engine.CameraParams
+import com.spectrafilm.engine.ColorSpace
+import com.spectrafilm.engine.DirCouplersParams
+import com.spectrafilm.engine.InputGamutCompress
+import com.spectrafilm.engine.IoParams
+import com.spectrafilm.engine.OutputGamutCompress
+import com.spectrafilm.engine.Rgb2Raw
+import com.spectrafilm.engine.SettingsParams
 import com.spectrafilm.engine.DiffusionFilterParams
 import com.spectrafilm.engine.EnlargerParams
 import com.spectrafilm.engine.FilmRenderingParams
@@ -35,27 +42,71 @@ data class Recipe(
     val grainSizeUm2: Float = 0.2f,
     val grainBlur: Float = 0.65f,
     val grainSublayers: Boolean = true,
-    // Diffusion filter (in front of the lens)
+    // Halation, continued
+    val halationProtectEv: Float = 4.0f,
+    val halationBounces: Int = 3,
+    val halationDecay: Float = 0.5f,
+    // Grain, continued
+    val grainMicroAmount: Float = 0.2f,
+    val grainMicroScale: Float = 30f,
+    val grainDyeCloudUm: Float = 1.0f,
+    val grainSublayerCount: Int = 1,
+    // DIR couplers (chemistry: saturation and edge contrast)
+    val dir: Boolean = true,
+    val dirAmount: Float = 1.0f,
+    val dirSameLayer: Float = 1.0f,
+    val dirInterLayer: Float = 1.0f,
+    val dirDiffusionUm: Float = 20f,
+    // Camera
+    val lensBlurUm: Float = 0f,
+    val filmFormatMm: Float = 35f,
+    // Diffusion filter on the lens
     val diffusion: Boolean = false,
     val diffusionFamily: String = "black_pro_mist",
     val diffusionStrength: Float = 0.5f,
+    val diffusionScale: Float = 1.0f,
+    val diffusionCore: Float = 1.0f,
+    val diffusionCoreSize: Float = 1.0f,
     val diffusionHalo: Float = 1.0f,
+    val diffusionHaloSize: Float = 1.0f,
     val diffusionBloom: Float = 1.0f,
+    val diffusionBloomSize: Float = 1.0f,
     val diffusionWarmth: Float = 0f,
+    // Diffusion filter on the enlarger (printing through a filter)
+    val printDiffusion: Boolean = false,
+    val printDiffusionFamily: String = "black_pro_mist",
+    val printDiffusionStrength: Float = 0.5f,
     // Enlarger / paper
     val printExposure: Float = 1.0f,
     val yFilterShift: Float = 0f,
     val mFilterShift: Float = 0f,
     val preflash: Float = 0f,
     val printContrast: Float = 1.0f,
+    val enlargerLensBlur: Float = 0f,
+    val yFilterNeutral: Float = 55f,
+    val mFilterNeutral: Float = 65f,
     // Scanner
     val unsharpAmount: Float = 0.7f,
     val unsharpRadius: Float = 0.7f,
     val whiteCorrection: Boolean = false,
     val blackCorrection: Boolean = false,
-    // Output
+    val scannerWhiteLevel: Float = 0.98f,
+    val scannerBlackLevel: Float = 0.01f,
+    val scannerLensBlur: Float = 0f,
+    val scanFilm: Boolean = false,          // skip the print stage: the scanned-negative look
+    // Output & colour
     val glare: Boolean = true,
     val glarePercent: Float = 0.03f,
+    val glareRoughness: Float = 0.7f,
+    val glareBlur: Float = 0.5f,
+    val outputColorSpace: String = "SRGB",
+    val outputGamutCompress: String = "LEGACY_CLIP",
+    val inputGamutCompress: String = "OFF",
+    // Engine
+    val rgbToRaw: String = "HANATOS2025",
+    val spectralBlur: Float = 0f,
+    val gpuPreview: Boolean = false,
+    val gpuExport: Boolean = false,
 ) {
     /** Build the engine's parameter tree from this recipe. */
     fun toParams(): SpektraParams = SpektraParams(
@@ -64,22 +115,52 @@ data class Recipe(
         camera = CameraParams(
             exposureCompensationEv = exposureEv,
             autoExposure = true,
+            lensBlurUm = lensBlurUm,
+            filmFormatMm = filmFormatMm,
             diffusionFilter = DiffusionFilterParams(
-                active = diffusion, filterFamily = diffusionFamily, strength = diffusionStrength,
-                haloIntensity = diffusionHalo, bloomIntensity = diffusionBloom, haloWarmth = diffusionWarmth,
+                active = diffusion, filterFamily = diffusionFamily, strength = diffusionStrength, spatialScale = diffusionScale,
+                coreIntensity = diffusionCore, coreSize = diffusionCoreSize,
+                haloIntensity = diffusionHalo, haloSize = diffusionHaloSize,
+                bloomIntensity = diffusionBloom, bloomSize = diffusionBloomSize, haloWarmth = diffusionWarmth,
             ),
         ),
         filmRender = FilmRenderingParams(
             // Pushing film raises contrast: fold the push into the density gamma.
             densityCurveGamma = filmContrast * Math.pow(1.12, pushStops.toDouble()).toFloat(),
-            grain = GrainParams(active = grain, sublayersActive = grainSublayers, agxParticleAreaUm2 = grainSizeUm2, blur = grainBlur),
+            grain = GrainParams(
+                active = grain, sublayersActive = grainSublayers, agxParticleAreaUm2 = grainSizeUm2, blur = grainBlur,
+                blurDyeCloudsUm = grainDyeCloudUm, microStructure = grainMicroAmount to grainMicroScale, nSubLayers = grainSublayerCount,
+            ),
             halation = HalationParams(active = halation, halationAmount = halationAmount, halationSpatialScale = halationScale,
-                scatterAmount = scatterAmount, boostEv = halationBoostEv),
-            glare = GlareParams(active = glare, percent = glarePercent),
+                scatterAmount = scatterAmount, boostEv = halationBoostEv, protectEv = halationProtectEv,
+                halationNBounces = halationBounces, halationBounceDecay = halationDecay),
+            dirCouplers = DirCouplersParams(active = dir, amount = dirAmount, inhibitionSamelayer = dirSameLayer,
+                inhibitionInterlayer = dirInterLayer, diffusionSizeUm = dirDiffusionUm),
+            glare = GlareParams(active = glare, percent = glarePercent, roughness = glareRoughness, blur = glareBlur),
         ),
-        enlarger = EnlargerParams(printExposure = printExposure, yFilterShift = yFilterShift, mFilterShift = mFilterShift, preflashExposure = preflash),
-        printRender = PrintRenderingParams(densityCurveGamma = printContrast),
-        scanner = ScannerParams(unsharpMask = unsharpAmount to unsharpRadius, whiteCorrection = whiteCorrection, blackCorrection = blackCorrection),
+        enlarger = EnlargerParams(
+            printExposure = printExposure, yFilterShift = yFilterShift, mFilterShift = mFilterShift,
+            yFilterNeutral = yFilterNeutral, mFilterNeutral = mFilterNeutral,
+            preflashExposure = preflash, lensBlur = enlargerLensBlur,
+            diffusionFilter = DiffusionFilterParams(active = printDiffusion, filterFamily = printDiffusionFamily, strength = printDiffusionStrength),
+        ),
+        printRender = PrintRenderingParams(densityCurveGamma = printContrast, glare = GlareParams(active = glare, percent = glarePercent)),
+        scanner = ScannerParams(
+            lensBlur = scannerLensBlur, unsharpMask = unsharpAmount to unsharpRadius,
+            whiteCorrection = whiteCorrection, blackCorrection = blackCorrection,
+            whiteLevel = scannerWhiteLevel, blackLevel = scannerBlackLevel,
+        ),
+        io = IoParams(
+            outputColorSpace = runCatching { ColorSpace.valueOf(outputColorSpace) }.getOrDefault(ColorSpace.SRGB),
+            outputGamutCompress = runCatching { OutputGamutCompress.valueOf(outputGamutCompress) }.getOrDefault(OutputGamutCompress.LEGACY_CLIP),
+            inputGamutCompress = runCatching { InputGamutCompress.valueOf(inputGamutCompress) }.getOrDefault(InputGamutCompress.OFF),
+            scanFilm = scanFilm,
+        ),
+        settings = SettingsParams(
+            rgbToRawMethod = runCatching { Rgb2Raw.valueOf(rgbToRaw) }.getOrDefault(Rgb2Raw.HANATOS2025),
+            spectralGaussianBlur = spectralBlur,
+            gpuPreview = gpuPreview, gpuExport = gpuExport,
+        ),
     )
 
     fun toJson(): String = JSONObject().apply {
@@ -87,37 +168,71 @@ data class Recipe(
         put("exposureEv", exposureEv.toDouble()); put("pushStops", pushStops.toDouble()); put("filmContrast", filmContrast.toDouble())
         put("halation", halation); put("halationAmount", halationAmount.toDouble()); put("halationScale", halationScale.toDouble())
         put("scatterAmount", scatterAmount.toDouble()); put("halationBoostEv", halationBoostEv.toDouble())
+        put("halationProtectEv", halationProtectEv.toDouble()); put("halationBounces", halationBounces); put("halationDecay", halationDecay.toDouble())
         put("grain", grain); put("grainSizeUm2", grainSizeUm2.toDouble()); put("grainBlur", grainBlur.toDouble()); put("grainSublayers", grainSublayers)
+        put("grainMicroAmount", grainMicroAmount.toDouble()); put("grainMicroScale", grainMicroScale.toDouble())
+        put("grainDyeCloudUm", grainDyeCloudUm.toDouble()); put("grainSublayerCount", grainSublayerCount)
+        put("dir", dir); put("dirAmount", dirAmount.toDouble()); put("dirSameLayer", dirSameLayer.toDouble())
+        put("dirInterLayer", dirInterLayer.toDouble()); put("dirDiffusionUm", dirDiffusionUm.toDouble())
+        put("lensBlurUm", lensBlurUm.toDouble()); put("filmFormatMm", filmFormatMm.toDouble())
         put("diffusion", diffusion); put("diffusionFamily", diffusionFamily); put("diffusionStrength", diffusionStrength.toDouble())
-        put("diffusionHalo", diffusionHalo.toDouble()); put("diffusionBloom", diffusionBloom.toDouble()); put("diffusionWarmth", diffusionWarmth.toDouble())
+        put("diffusionScale", diffusionScale.toDouble()); put("diffusionCore", diffusionCore.toDouble()); put("diffusionCoreSize", diffusionCoreSize.toDouble())
+        put("diffusionHalo", diffusionHalo.toDouble()); put("diffusionHaloSize", diffusionHaloSize.toDouble())
+        put("diffusionBloom", diffusionBloom.toDouble()); put("diffusionBloomSize", diffusionBloomSize.toDouble()); put("diffusionWarmth", diffusionWarmth.toDouble())
+        put("printDiffusion", printDiffusion); put("printDiffusionFamily", printDiffusionFamily); put("printDiffusionStrength", printDiffusionStrength.toDouble())
         put("printExposure", printExposure.toDouble()); put("yFilterShift", yFilterShift.toDouble()); put("mFilterShift", mFilterShift.toDouble())
-        put("preflash", preflash.toDouble()); put("printContrast", printContrast.toDouble())
+        put("preflash", preflash.toDouble()); put("printContrast", printContrast.toDouble()); put("enlargerLensBlur", enlargerLensBlur.toDouble())
+        put("yFilterNeutral", yFilterNeutral.toDouble()); put("mFilterNeutral", mFilterNeutral.toDouble())
         put("unsharpAmount", unsharpAmount.toDouble()); put("unsharpRadius", unsharpRadius.toDouble())
         put("whiteCorrection", whiteCorrection); put("blackCorrection", blackCorrection)
-        put("glare", glare); put("glarePercent", glarePercent.toDouble())
+        put("scannerWhiteLevel", scannerWhiteLevel.toDouble()); put("scannerBlackLevel", scannerBlackLevel.toDouble())
+        put("scannerLensBlur", scannerLensBlur.toDouble()); put("scanFilm", scanFilm)
+        put("glare", glare); put("glarePercent", glarePercent.toDouble()); put("glareRoughness", glareRoughness.toDouble()); put("glareBlur", glareBlur.toDouble())
+        put("outputColorSpace", outputColorSpace); put("outputGamutCompress", outputGamutCompress); put("inputGamutCompress", inputGamutCompress)
+        put("rgbToRaw", rgbToRaw); put("spectralBlur", spectralBlur.toDouble()); put("gpuPreview", gpuPreview); put("gpuExport", gpuExport)
     }.toString()
 
     companion object {
         fun fromJson(s: String): Recipe = try {
             val o = JSONObject(s); val d = Recipe()
+            fun f(k: String, v: Float) = o.optDouble(k, v.toDouble()).toFloat()
             Recipe(
                 film = o.optString("film", d.film), paper = o.optString("paper", d.paper),
-                exposureEv = o.optDouble("exposureEv", 0.0).toFloat(), pushStops = o.optDouble("pushStops", 0.0).toFloat(),
-                filmContrast = o.optDouble("filmContrast", 1.0).toFloat(),
-                halation = o.optBoolean("halation", true), halationAmount = o.optDouble("halationAmount", 1.0).toFloat(),
-                halationScale = o.optDouble("halationScale", 1.0).toFloat(), scatterAmount = o.optDouble("scatterAmount", 1.0).toFloat(),
-                halationBoostEv = o.optDouble("halationBoostEv", 0.0).toFloat(),
-                grain = o.optBoolean("grain", true), grainSizeUm2 = o.optDouble("grainSizeUm2", 0.2).toFloat(),
-                grainBlur = o.optDouble("grainBlur", 0.65).toFloat(), grainSublayers = o.optBoolean("grainSublayers", true),
-                diffusion = o.optBoolean("diffusion", false), diffusionFamily = o.optString("diffusionFamily", d.diffusionFamily),
-                diffusionStrength = o.optDouble("diffusionStrength", 0.5).toFloat(), diffusionHalo = o.optDouble("diffusionHalo", 1.0).toFloat(),
-                diffusionBloom = o.optDouble("diffusionBloom", 1.0).toFloat(), diffusionWarmth = o.optDouble("diffusionWarmth", 0.0).toFloat(),
-                printExposure = o.optDouble("printExposure", 1.0).toFloat(), yFilterShift = o.optDouble("yFilterShift", 0.0).toFloat(),
-                mFilterShift = o.optDouble("mFilterShift", 0.0).toFloat(), preflash = o.optDouble("preflash", 0.0).toFloat(),
-                printContrast = o.optDouble("printContrast", 1.0).toFloat(),
-                unsharpAmount = o.optDouble("unsharpAmount", 0.7).toFloat(), unsharpRadius = o.optDouble("unsharpRadius", 0.7).toFloat(),
-                whiteCorrection = o.optBoolean("whiteCorrection", false), blackCorrection = o.optBoolean("blackCorrection", false),
-                glare = o.optBoolean("glare", true), glarePercent = o.optDouble("glarePercent", 0.03).toFloat(),
+                exposureEv = f("exposureEv", d.exposureEv), pushStops = f("pushStops", d.pushStops), filmContrast = f("filmContrast", d.filmContrast),
+                halation = o.optBoolean("halation", d.halation), halationAmount = f("halationAmount", d.halationAmount),
+                halationScale = f("halationScale", d.halationScale), scatterAmount = f("scatterAmount", d.scatterAmount),
+                halationBoostEv = f("halationBoostEv", d.halationBoostEv), halationProtectEv = f("halationProtectEv", d.halationProtectEv),
+                halationBounces = o.optInt("halationBounces", d.halationBounces), halationDecay = f("halationDecay", d.halationDecay),
+                grain = o.optBoolean("grain", d.grain), grainSizeUm2 = f("grainSizeUm2", d.grainSizeUm2), grainBlur = f("grainBlur", d.grainBlur),
+                grainSublayers = o.optBoolean("grainSublayers", d.grainSublayers), grainMicroAmount = f("grainMicroAmount", d.grainMicroAmount),
+                grainMicroScale = f("grainMicroScale", d.grainMicroScale), grainDyeCloudUm = f("grainDyeCloudUm", d.grainDyeCloudUm),
+                grainSublayerCount = o.optInt("grainSublayerCount", d.grainSublayerCount),
+                dir = o.optBoolean("dir", d.dir), dirAmount = f("dirAmount", d.dirAmount), dirSameLayer = f("dirSameLayer", d.dirSameLayer),
+                dirInterLayer = f("dirInterLayer", d.dirInterLayer), dirDiffusionUm = f("dirDiffusionUm", d.dirDiffusionUm),
+                lensBlurUm = f("lensBlurUm", d.lensBlurUm), filmFormatMm = f("filmFormatMm", d.filmFormatMm),
+                diffusion = o.optBoolean("diffusion", d.diffusion), diffusionFamily = o.optString("diffusionFamily", d.diffusionFamily),
+                diffusionStrength = f("diffusionStrength", d.diffusionStrength), diffusionScale = f("diffusionScale", d.diffusionScale),
+                diffusionCore = f("diffusionCore", d.diffusionCore), diffusionCoreSize = f("diffusionCoreSize", d.diffusionCoreSize),
+                diffusionHalo = f("diffusionHalo", d.diffusionHalo), diffusionHaloSize = f("diffusionHaloSize", d.diffusionHaloSize),
+                diffusionBloom = f("diffusionBloom", d.diffusionBloom), diffusionBloomSize = f("diffusionBloomSize", d.diffusionBloomSize),
+                diffusionWarmth = f("diffusionWarmth", d.diffusionWarmth),
+                printDiffusion = o.optBoolean("printDiffusion", d.printDiffusion), printDiffusionFamily = o.optString("printDiffusionFamily", d.printDiffusionFamily),
+                printDiffusionStrength = f("printDiffusionStrength", d.printDiffusionStrength),
+                printExposure = f("printExposure", d.printExposure), yFilterShift = f("yFilterShift", d.yFilterShift),
+                mFilterShift = f("mFilterShift", d.mFilterShift), preflash = f("preflash", d.preflash), printContrast = f("printContrast", d.printContrast),
+                enlargerLensBlur = f("enlargerLensBlur", d.enlargerLensBlur), yFilterNeutral = f("yFilterNeutral", d.yFilterNeutral),
+                mFilterNeutral = f("mFilterNeutral", d.mFilterNeutral),
+                unsharpAmount = f("unsharpAmount", d.unsharpAmount), unsharpRadius = f("unsharpRadius", d.unsharpRadius),
+                whiteCorrection = o.optBoolean("whiteCorrection", d.whiteCorrection), blackCorrection = o.optBoolean("blackCorrection", d.blackCorrection),
+                scannerWhiteLevel = f("scannerWhiteLevel", d.scannerWhiteLevel), scannerBlackLevel = f("scannerBlackLevel", d.scannerBlackLevel),
+                scannerLensBlur = f("scannerLensBlur", d.scannerLensBlur), scanFilm = o.optBoolean("scanFilm", d.scanFilm),
+                glare = o.optBoolean("glare", d.glare), glarePercent = f("glarePercent", d.glarePercent),
+                glareRoughness = f("glareRoughness", d.glareRoughness), glareBlur = f("glareBlur", d.glareBlur),
+                outputColorSpace = o.optString("outputColorSpace", d.outputColorSpace),
+                outputGamutCompress = o.optString("outputGamutCompress", d.outputGamutCompress),
+                inputGamutCompress = o.optString("inputGamutCompress", d.inputGamutCompress),
+                rgbToRaw = o.optString("rgbToRaw", d.rgbToRaw), spectralBlur = f("spectralBlur", d.spectralBlur),
+                gpuPreview = o.optBoolean("gpuPreview", d.gpuPreview), gpuExport = o.optBoolean("gpuExport", d.gpuExport),
             )
         } catch (t: Throwable) { Recipe() }
     }

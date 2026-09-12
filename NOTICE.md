@@ -3,6 +3,14 @@
 Latent is free software, released under the GNU General Public License v3.0
 (see LICENSE).
 
+## Required attribution (GPLv3 §7(b))
+
+> **Spektrafilm for Android** by Akshay Sharma — https://github.com/thetechgeekko/Spektrafilm-android
+>
+> Film modeling powered by **spektrafilm** (Andrea Volpato) — https://github.com/andreavolpato/spektrafilm
+
+Both lines are displayed in Latent's About screen with clickable links.
+
 ## Credits
 
 Film modeling will be powered by **spektrafilm** — a physically based spectral
@@ -23,3 +31,9 @@ the upstream port), currently:
 
 RAW decoding uses LibRaw (LGPL-2.1 / CDDL-1.0), vendored in that project's
 `lib:libraw` module.
+
+
+## Latent
+
+Camera, develop flow and darkroom by Celestial — https://github.com/itwasrajesh-jpg/latent
+Written with Anthropic's Claude, in conversation with the author.

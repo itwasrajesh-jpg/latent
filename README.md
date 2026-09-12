@@ -3,9 +3,14 @@
 A film camera for Android. Pick a film, see its look in the viewfinder, shoot
 RAW, and let the photo develop.
 
-Film modeling will be powered by [spektrafilm](https://github.com/andreavolpato/spektrafilm)
-via the [Spektrafilm-android](https://github.com/thetechgeekko/Spektrafilm-android) engine port.
-See NOTICE.md for credits and LICENSE for terms (GPLv3).
+## Attribution
+
+> **Spektrafilm for Android** by Akshay Sharma — https://github.com/thetechgeekko/Spektrafilm-android
+>
+> Film modeling powered by **spektrafilm** (Andrea Volpato) — https://github.com/andreavolpato/spektrafilm
+
+Both lines are required under GPLv3 §7(b) and are shown in the app's About screen.
+See NOTICE.md for the full terms and LICENSE for GPLv3.
 
 ## Status
 

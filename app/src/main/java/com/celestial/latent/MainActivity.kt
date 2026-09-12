@@ -118,6 +118,7 @@ private fun Root() {
             onOpenProbe = { screen = "probe" },
             onOpenLogs = { screen = "logs" },
             onOpenExtension = { screen = "extension" },
+            onOpenAbout = { screen = "about" },
             onBack = { screen = "camera" },
         )
         "roll" -> RollScreen(
@@ -136,9 +137,11 @@ private fun Root() {
         "extension" -> if (android.os.Build.VERSION.SDK_INT >= 31) ExtensionScreen(
             settings = settings,
             onSettingsChange = { s -> settings = s; AppSettings.save(context, s) },
+            onOpenRoll = { screen = "roll" },
             onBack = { screen = "camera" },
         ) else { screen = "camera" }
         "logs" -> LogScreen(onBack = { screen = "settings" })
+        "about" -> AboutScreen(onBack = { screen = "settings" })
         "probe" -> ProbeScreen(settings = settings, onBack = { screen = "settings" })
         "vendor" -> VendorScreen(
             settings = settings,
@@ -154,6 +157,7 @@ private fun Root() {
             onOpenDarkroom = { uri, isRaw -> darkroomSource = uri; darkroomIsRaw = isRaw; screen = "darkroom" },
             onOpenSettings = { screen = "settings" },
             onOpenExtension = { screen = "extension" },
+            onOpenAbout = { screen = "about" },
             onLensChanged = { l -> if (settings.rememberLens) { settings = settings.copy(defaultLensId = l.physicalId); AppSettings.save(context, settings) } },
             onController = { c -> controllerRef = c },
             onVendorEcho = { e -> vendorEcho = e },

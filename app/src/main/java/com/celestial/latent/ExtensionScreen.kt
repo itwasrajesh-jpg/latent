@@ -203,8 +203,12 @@ class ExtensionCamera(private val context: android.content.Context, private val 
             onStatus("Opening camera 0 with ${extName(extension)}…")
             cm.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(cam: CameraDevice) {
+                    // The camera can open after something already closed us (fast mode switch, pause,
+                    // another app taking the camera): give it back instead of using a cleared reader.
+                    val r = reader
+                    if (r == null || !surface.isValid) { onStatus("camera opened after close; releasing"); cam.close(); device = null; return }
                     device = cam
-                    val cfg = ExtensionSessionConfiguration(extension, listOf(OutputConfiguration(surface), OutputConfiguration(reader!!.surface)), executor,
+                    val cfg = ExtensionSessionConfiguration(extension, listOf(OutputConfiguration(surface), OutputConfiguration(r.surface)), executor,
                         object : CameraExtensionSession.StateCallback() {
                             override fun onConfigured(s: CameraExtensionSession) {
                                 session = s
@@ -255,7 +259,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
 
 @RequiresApi(31)
 @Composable
-fun ExtensionScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, onBack: () -> Unit) {
+fun ExtensionScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, onOpenRoll: () -> Unit = {}, onBack: () -> Unit) {
     val context = LocalContext.current
     var status by remember { mutableStateOf("Starting…") }
     var mode by remember { mutableStateOf(CameraExtensionCharacteristics.EXTENSION_BOKEH) }
@@ -384,8 +388,7 @@ fun ExtensionScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Un
         // Shutter row: thumbnail · shutter · spacer
         Row(Modifier.fillMaxWidth().padding(horizontal = 30.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)).background(LatentColors.Surface).combinedClickable(onClick = {
-                Haptics.tick(context)
-                lastUri?.let { uri -> runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).apply { setDataAndType(uri, "image/jpeg"); addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }) } }
+                Haptics.tick(context); onOpenRoll()
             })) { thumb?.let { androidx.compose.foundation.Image(it.asImageBitmap(), contentDescription = "Last photo", contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize()) } }
             Box(Modifier.size(78.dp).clip(CircleShape).border(2.dp, LatentColors.TextBright, CircleShape).combinedClickable(onClick = { Haptics.heavy(context); cam.capture() }), contentAlignment = Alignment.Center) {
                 Box(Modifier.size(62.dp).clip(CircleShape).background(LatentColors.TextBright))

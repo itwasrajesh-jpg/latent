@@ -31,7 +31,7 @@ import com.celestial.latent.camera.Lenses
 import com.celestial.latent.ui.LatentColors
 
 @Composable
-fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpenReport: () -> Unit, onOpenVendor: () -> Unit, onOpenProbe: () -> Unit, onOpenLogs: () -> Unit, onOpenExtension: () -> Unit, onBack: () -> Unit) {
+fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpenReport: () -> Unit, onOpenVendor: () -> Unit, onOpenProbe: () -> Unit, onOpenLogs: () -> Unit, onOpenExtension: () -> Unit, onOpenAbout: () -> Unit, onBack: () -> Unit) {
     Column(
         Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().navigationBarsPadding()
             .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
@@ -93,8 +93,9 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
         Text("Logs (app logcat) ›", color = LatentColors.Amber, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onOpenLogs).padding(vertical = 10.dp))
         Text("Camera report ›", color = LatentColors.Amber, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onOpenReport).padding(vertical = 10.dp))
 
+        Text("About & credits ›", color = LatentColors.Amber, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onOpenAbout).padding(vertical = 10.dp))
         Spacer(Modifier.height(24.dp))
-        Text("Latent v" + BuildConfig.VERSION_NAME + " · film modeling will be powered by spektrafilm", color = LatentColors.TextDim, fontSize = 11.sp)
+        Text("Latent v" + BuildConfig.VERSION_NAME + " · film modeling powered by spektrafilm", color = LatentColors.TextDim, fontSize = 11.sp)
     }
 }
 
