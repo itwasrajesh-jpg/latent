@@ -33,6 +33,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,7 +56,9 @@ import com.celestial.latent.develop.Recipes
 import com.celestial.latent.ui.LatentColors
 import kotlinx.coroutines.delay
 
-private const val PREVIEW_EDGE = 900
+private const val COARSE_EDGE = 500     // while a control is moving
+private const val FINE_EDGE = 900       // once it settles
+private const val DECODE_EDGE = 1600    // the RAW is decoded once at this size for the darkroom
 
 private val TABS = listOf(
     "film" to "FILM", "halation" to "HALATION", "grain" to "GRAIN", "diffusion" to "DIFFUSION",
@@ -81,39 +84,45 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
     var status by remember { mutableStateOf("") }
     var rendering by remember { mutableStateOf(false) }
     var pendingAt by remember { mutableStateOf(0L) }
+    var src by remember { mutableStateOf<Develop.Source?>(null) }
+    var coarse by remember { mutableStateOf(false) }
     var tab by remember { mutableStateOf("film") }
     var sheet by remember { mutableStateOf(0) }   // 0 peek, 1 half, 2 full
     var saveName by remember { mutableStateOf("") }
 
-    fun render() {
+    fun render(fast: Boolean) {
         if (rendering) { pendingAt = System.currentTimeMillis(); return }
         rendering = true
-        val r = recipe
+        val r = recipe.copy(previewMaxSize = if (fast) COARSE_EDGE else FINE_EDGE)
         Thread {
             val lane = com.celestial.latent.develop.DevelopQueue.engineLane
-            if (!lane.tryAcquire()) {
-                status = "waiting for the background develop to finish…"
-                lane.acquire()
-            }
+            if (!lane.tryAcquire()) { status = "waiting for the background develop to finish…"; lane.acquire() }
             try {
-                val t = System.nanoTime()
-                val (bytes, dims) = if (isRaw) Develop.developDngTo(context, source, r, PREVIEW_EDGE)
-                                    else Develop.developJpegTo(context, source, r, PREVIEW_EDGE)
+                // Decode once; every later edit reuses it.
+                if (src == null) {
+                    status = "decoding…"
+                    src = if (isRaw) Develop.openRaw(context, source, DECODE_EDGE) else Develop.openImage(context, source, DECODE_EDGE)
+                }
+                val (bytes, dims) = Develop.render(context, src!!, r, preview = true) { m -> status = m }
                 preview = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                status = "preview ${dims.first}×${dims.second} · ${(System.nanoTime() - t) / 1_000_000} ms"
             } catch (t: Throwable) { status = "failed: ${t.message}" }
             finally { lane.release() }
             rendering = false
-            if (pendingAt > 0) { pendingAt = 0; render() }
+            if (pendingAt > 0) { pendingAt = 0; render(fast) }
         }.start()
     }
 
     // First render, then re-render shortly after the last control change.
+    // A quick coarse pass while a control is moving, then a fine one when it settles.
     LaunchedEffect(recipe) {
-        delay(300)
+        coarse = true
+        render(fast = true)
+        delay(450)
+        coarse = false
         onRecipeChanged(recipe); Recipes.setCurrent(context, recipe)
-        render()
+        render(fast = false)
     }
+    DisposableEffect(Unit) { onDispose { src?.close(); src = null } }
 
     fun set(block: Recipe.() -> Recipe) { recipe = recipe.block() }
 
@@ -240,6 +249,15 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                         Note("Format changes how big grain and halation look, because they are measured in micrometres on the negative.")
                     }
                     "enlarger" -> {
+                        Head("PAPER / PRINT STOCK", null) {}
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Develop.PAPERS.forEach { (id, label) ->
+                                val on = id == recipe.paper
+                                Text(label, color = if (on) LatentColors.AmberInk else LatentColors.Text, fontSize = 10.sp,
+                                    modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(if (on) LatentColors.Amber else LatentColors.Surface)
+                                        .combinedClickable(onClick = { Haptics.tick(context); set { copy(paper = id) } }).padding(horizontal = 10.dp, vertical = 5.dp))
+                            }
+                        }
                         S("Print exposure", recipe.printExposure, 0.4f, 2.2f, "%.2f") { set { copy(printExposure = it) } }
                         S("Paper contrast", recipe.printContrast, 0.6f, 1.6f, "%.2f") { set { copy(printContrast = it) } }
                         S("Yellow filter", recipe.yFilterShift, -20f, 20f, "%+.0f") { set { copy(yFilterShift = it) } }
@@ -279,9 +297,10 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                         Chips(listOf("HANATOS2025", "MALLETT2019"), recipe.rgbToRaw) { set { copy(rgbToRaw = it) } }
                         Note("How a colour is turned into a light spectrum before the film sees it. Hanatos 2025 is the engine's default.")
                         S("Spectral blur", recipe.spectralBlur, 0f, 20f, "%.1f") { set { copy(spectralBlur = it) } }
+                        S("Preview size", recipe.previewMaxSize.toFloat(), 300f, 1600f, "%.0f px") { set { copy(previewMaxSize = Math.round(it)) } }
                         Toggle("GPU preview (experimental)", recipe.gpuPreview) { set { copy(gpuPreview = it) } }
                         Toggle("GPU export (experimental)", recipe.gpuExport) { set { copy(gpuExport = it) } }
-                        Note("The GPU paths self-check against the CPU engine on this device and fall back if they disagree.")
+                        Note("GPU speeds up the scan stage only; the spectral work stays on the CPU. Both paths self-check against the CPU engine on this device and fall back if they disagree.")
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -311,7 +330,11 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                     val r = recipe
                     Thread {
                         try {
-                            val out = if (isRaw) Develop.developDng(context, source, r) else Develop.developJpeg(context, source, r)
+                            val lane = com.celestial.latent.develop.DevelopQueue.engineLane
+                            lane.acquire()
+                            val out = try {
+                                if (isRaw) Develop.developDng(context, source, r) else Develop.developJpeg(context, source, r)
+                            } finally { lane.release() }
                             status = "saved"
                             runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).apply { setDataAndType(out, "image/jpeg"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }) }
                         } catch (t: Throwable) { status = "failed: ${t.message}" }

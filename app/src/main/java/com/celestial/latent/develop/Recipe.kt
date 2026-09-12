@@ -107,6 +107,7 @@ data class Recipe(
     val spectralBlur: Float = 0f,
     val gpuPreview: Boolean = false,
     val gpuExport: Boolean = false,
+    val previewMaxSize: Int = 900,   // the engine's own preview fast-path target
 ) {
     /** Build the engine's parameter tree from this recipe. */
     fun toParams(): SpektraParams = SpektraParams(
@@ -160,6 +161,7 @@ data class Recipe(
             rgbToRawMethod = runCatching { Rgb2Raw.valueOf(rgbToRaw) }.getOrDefault(Rgb2Raw.HANATOS2025),
             spectralGaussianBlur = spectralBlur,
             gpuPreview = gpuPreview, gpuExport = gpuExport,
+            previewMaxSize = previewMaxSize,
         ),
     )
 
@@ -189,7 +191,7 @@ data class Recipe(
         put("scannerLensBlur", scannerLensBlur.toDouble()); put("scanFilm", scanFilm)
         put("glare", glare); put("glarePercent", glarePercent.toDouble()); put("glareRoughness", glareRoughness.toDouble()); put("glareBlur", glareBlur.toDouble())
         put("outputColorSpace", outputColorSpace); put("outputGamutCompress", outputGamutCompress); put("inputGamutCompress", inputGamutCompress)
-        put("rgbToRaw", rgbToRaw); put("spectralBlur", spectralBlur.toDouble()); put("gpuPreview", gpuPreview); put("gpuExport", gpuExport)
+        put("rgbToRaw", rgbToRaw); put("spectralBlur", spectralBlur.toDouble()); put("gpuPreview", gpuPreview); put("gpuExport", gpuExport); put("previewMaxSize", previewMaxSize)
     }.toString()
 
     companion object {
@@ -233,6 +235,7 @@ data class Recipe(
                 inputGamutCompress = o.optString("inputGamutCompress", d.inputGamutCompress),
                 rgbToRaw = o.optString("rgbToRaw", d.rgbToRaw), spectralBlur = f("spectralBlur", d.spectralBlur),
                 gpuPreview = o.optBoolean("gpuPreview", d.gpuPreview), gpuExport = o.optBoolean("gpuExport", d.gpuExport),
+                previewMaxSize = o.optInt("previewMaxSize", d.previewMaxSize),
             )
         } catch (t: Throwable) { Recipe() }
     }
@@ -242,7 +245,7 @@ data class Recipe(
 object Recipes {
     private const val FILE = "latent_recipes"
 
-    fun current(ctx: Context): Recipe = Recipe.fromJson(prefs(ctx).getString("__current", "{}") ?: "{}")
+    fun current(ctx: Context): Recipe = Develop.sanitised(Recipe.fromJson(prefs(ctx).getString("__current", "{}") ?: "{}"))
     fun setCurrent(ctx: Context, r: Recipe) = prefs(ctx).edit().putString("__current", r.toJson()).apply()
 
     fun names(ctx: Context): List<String> = prefs(ctx).all.keys.filter { !it.startsWith("__") }.sorted()

@@ -20,18 +20,111 @@ import java.nio.ByteOrder
  */
 object Develop {
 
-    /** Films worth putting in front of a person first; the engine bundles many more. */
+    /**
+     * A decoded image held in memory while the darkroom is open, so each edit re-renders
+     * without decoding the RAW again. close() frees the native buffer.
+     */
+    class Source(val image: LinearImage, val width: Int, val height: Int) : AutoCloseable {
+        override fun close() = image.close()
+    }
+
+    /** Decode a RAW once, capped to [maxEdge] (0 = full size). */
+    fun openRaw(context: Context, dng: Uri, maxEdge: Int = 0): Source {
+        val decoded = context.contentResolver.openFileDescriptor(dng, "r")?.use {
+            RawDecoder.decodeToLinear(it.fd, RawDecoder.Settings(maxLongEdge = maxEdge))
+        } ?: error("could not open $dng")
+        val img = LinearImage(decoded.data, decoded.width, decoded.height, colorSpace = decoded.colorSpace,
+            onClose = { RawDecoder.freeOffHeap(it) })
+        return Source(img, decoded.width, decoded.height)
+    }
+
+    /** Decode an already-processed image once, linearised for the engine. */
+    fun openImage(context: Context, image: Uri, maxEdge: Int = 0): Source {
+        val src = context.contentResolver.openInputStream(image)?.use { android.graphics.BitmapFactory.decodeStream(it) }
+            ?: error("could not open $image")
+        val scale = if (maxEdge > 0) minOf(1f, maxEdge.toFloat() / maxOf(src.width, src.height)) else 1f
+        val bmp = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(src, (src.width * scale).toInt(), (src.height * scale).toInt(), true) else src
+        val w = bmp.width; val h = bmp.height
+        val buf = ByteBuffer.allocateDirect(w * h * 3 * 4).order(ByteOrder.nativeOrder())
+        val f = buf.asFloatBuffer()
+        val row = IntArray(w)
+        fun toLinear(v: Int): Float {
+            val c = v / 255f
+            return if (c <= 0.04045f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
+        }
+        for (y in 0 until h) {
+            bmp.getPixels(row, 0, w, 0, y, w, 1)
+            for (x in 0 until w) { val p = row[x]; f.put(toLinear((p shr 16) and 0xFF)); f.put(toLinear((p shr 8) and 0xFF)); f.put(toLinear(p and 0xFF)) }
+        }
+        if (bmp !== src) bmp.recycle()
+        src.recycle()
+        return Source(LinearImage(buf, w, h, colorSpace = "sRGB"), w, h)
+    }
+
+    /**
+     * Render an already-decoded source. [preview] uses the engine's own downscaled fast path,
+     * which is also the only path that honours the GPU preview flag.
+     */
+    fun render(context: Context, source: Source, recipe: Recipe, preview: Boolean, log: (String) -> Unit = {}): Pair<ByteArray, Pair<Int, Int>> {
+        val t = System.nanoTime()
+        var dims = 0 to 0
+        val params = sanitised(recipe).toParams()
+        val jpeg = SpektraEngine.fromAssets(context.assets).use { engine ->
+            val result = if (preview) engine.simulatePreview(source.image, params) else engine.simulate(source.image, params)
+            result.use { r -> dims = r.width to r.height; toJpeg(r.data, r.width, r.height, r.colorSpace) }
+        }
+        log((if (preview) "preview" else "full") + " ${dims.first}×${dims.second} in ${(System.nanoTime() - t) / 1_000_000} ms" +
+            (if (recipe.gpuPreview || recipe.gpuExport) " · GPU requested" else ""))
+        return jpeg to dims
+    }
+
+    /**
+     * Every FILMING profile the engine bundles. A printing profile (2383, Endura…) in the film
+     * slot makes the engine fail with "internal error": each profile declares its stage.
+     */
     val FILMS = listOf(
         "kodak_portra_400" to "Portra 400",
         "kodak_portra_160" to "Portra 160",
         "kodak_portra_800" to "Portra 800",
+        "kodak_portra_800_push1" to "Portra 800 +1",
+        "kodak_portra_800_push2" to "Portra 800 +2",
         "kodak_gold_200" to "Gold 200",
+        "kodak_ultramax_400" to "Ultramax 400",
         "kodak_ektar_100" to "Ektar 100",
-        "fujifilm_pro_400h" to "Pro 400H",
+        "kodak_ektachrome_100" to "Ektachrome 100",
+        "kodak_kodachrome_64" to "Kodachrome 64",
         "fujifilm_c200" to "C200",
-        "kodak_2383" to "Kodak 2383 (cine print)",
+        "fujifilm_xtra_400" to "X-Tra 400",
+        "fujifilm_pro_400h" to "Pro 400H",
+        "fujifilm_provia_100f" to "Provia 100F",
+        "fujifilm_velvia_100" to "Velvia 100",
+        "kodak_vision3_50d" to "Vision3 50D",
+        "kodak_vision3_250d" to "Vision3 250D",
+        "kodak_vision3_200t" to "Vision3 200T",
+        "kodak_vision3_500t" to "Vision3 500T",
+        "kodak_verita_200d" to "Verita 200D",
     )
+
+    /** Every PRINTING profile: papers for stills, print stocks for the cine films. */
+    val PAPERS = listOf(
+        "kodak_portra_endura" to "Portra Endura",
+        "kodak_supra_endura" to "Supra Endura",
+        "kodak_ultra_endura" to "Ultra Endura",
+        "kodak_endura_premier" to "Endura Premier",
+        "kodak_ektacolor_edge" to "Ektacolor Edge",
+        "fujifilm_crystal_archive_typeii" to "Crystal Archive II",
+        "kodak_2383" to "Vision 2383 (cine print)",
+        "kodak_2393" to "Vision Premier 2393",
+    )
+
     const val DEFAULT_PAPER = "kodak_portra_endura"
+
+    /** Guard against a saved recipe pointing at a profile in the wrong slot. */
+    fun sanitised(r: Recipe): Recipe {
+        val film = if (FILMS.any { it.first == r.film }) r.film else FILMS.first().first
+        val paper = if (PAPERS.any { it.first == r.paper }) r.paper else DEFAULT_PAPER
+        return if (film == r.film && paper == r.paper) r else r.copy(film = film, paper = paper)
+    }
 
     fun availableProfiles(context: Context): List<String> =
         SpektraEngine.fromAssets(context.assets).use { it.listProfiles() }
@@ -63,7 +156,7 @@ object Develop {
         var dims = 0 to 0
         val jpeg = image.use { img ->
             SpektraEngine.fromAssets(context.assets).use { engine ->
-                engine.simulate(img, recipe.toParams()).use { result ->
+                engine.simulate(img, sanitised(recipe).toParams()).use { result ->
                     dims = result.width to result.height
                     toJpeg(result.data, result.width, result.height, result.colorSpace)
                 }
@@ -158,7 +251,7 @@ object Develop {
         var dims = 0 to 0
         val jpeg = LinearImage(buf, w, h, colorSpace = "sRGB").use { img ->
             SpektraEngine.fromAssets(context.assets).use { engine ->
-                engine.simulate(img, recipe.toParams()).use { r -> dims = r.width to r.height; toJpeg(r.data, r.width, r.height, r.colorSpace) }
+                engine.simulate(img, sanitised(recipe).toParams()).use { r -> dims = r.width to r.height; toJpeg(r.data, r.width, r.height, r.colorSpace) }
             }
         }
         return jpeg to dims
