@@ -4,10 +4,17 @@ import android.content.Context
 import com.celestial.latent.camera.Lenses
 
 /** One vendor tag override, MotionCam-style. scope = "session" or "request"; type = i32/i64/f32/f64/u8. Arrays as comma/slash separated. */
-data class VendorTag(val name: String, val scope: String, val type: String, val value: String) {
-    fun encode() = listOf(name, scope, type, value).joinToString("\t")
+data class VendorTag(val name: String, val scope: String, val type: String, val value: String, val lens: String = "all") {
+    fun encode() = listOf(name, scope, type, value, lens).joinToString("\t")
     companion object {
-        fun decode(s: String): VendorTag? { val p = s.split("\t"); return if (p.size == 4) VendorTag(p[0], p[1], p[2], p[3]) else null }
+        fun decode(s: String): VendorTag? {
+            val p = s.split("\t")
+            return when (p.size) {
+                5 -> VendorTag(p[0], p[1], p[2], p[3], p[4])
+                4 -> VendorTag(p[0], p[1], p[2], p[3])   // entries saved before tags were per-lens
+                else -> null
+            }
+        }
     }
 }
 
@@ -21,7 +28,8 @@ data class AppSettings(
     val directOpen: Boolean = false,
     val saveJpeg: Boolean = false,      // RAW only, or RAW + JPEG side by side
     val cameraPath: String = "0",       // logical camera ID to route through ("0", "6", "7"...) or "direct"
-    val opmode: Int = 0,                // vendor session operating mode; 0 = regular
+    val opmode: Int = 0,                // vendor session operating mode; 0 = regular (applies to opmodeLens)
+    val opmodeLens: String = "all",     // which lens the opmode applies to
     val vendorTags: List<VendorTag> = emptyList(),
     val inSensorZoomJpeg: Boolean = true,   // EnableInsensorZoom, sent only while ×2 is on (JPEG path; RAW stays 1x)
     val teleZoomDirect: Boolean = true,     // open a tele lens directly while zoomed, so the logical camera cannot switch sensors
@@ -49,6 +57,7 @@ data class AppSettings(
                 saveJpeg = p.getBoolean("saveJpeg", false),
                 cameraPath = p.getString("cameraPath", if (p.getBoolean("directOpen", false)) "direct" else "0") ?: "0",
                 opmode = p.getInt("opmode", 0),
+                opmodeLens = p.getString("opmodeLens", "all") ?: "all",
                 vendorTags = (p.getString("vendorTags", "") ?: "").split("\n").mapNotNull { VendorTag.decode(it) },
                 inSensorZoomJpeg = p.getBoolean("inSensorZoomJpeg", true),
                 teleZoomDirect = p.getBoolean("teleZoomDirect", true),
@@ -69,6 +78,7 @@ data class AppSettings(
                 .putBoolean("saveJpeg", s.saveJpeg)
                 .putString("cameraPath", s.cameraPath)
                 .putInt("opmode", s.opmode)
+                .putString("opmodeLens", s.opmodeLens)
                 .putString("vendorTags", s.vendorTags.joinToString("\n") { it.encode() })
                 .putBoolean("inSensorZoomJpeg", s.inSensorZoomJpeg)
                 .putBoolean("teleZoomDirect", s.teleZoomDirect)

@@ -162,10 +162,11 @@ fun CameraScreen(
     }
     LaunchedEffect(settings.antibanding) { controller.setAntibanding(settings.antibanding) }
     // Any of these changes the streams or the session tags: push them, then let the controller rebuild if needed.
-    LaunchedEffect(settings.cameraPath, settings.opmode, settings.vendorTags, settings.saveJpeg, settings.inSensorZoomJpeg, settings.teleZoomDirect) {
+    LaunchedEffect(settings.cameraPath, settings.opmode, settings.opmodeLens, settings.vendorTags, settings.saveJpeg, settings.inSensorZoomJpeg, settings.teleZoomDirect) {
         controller.cameraPath = settings.cameraPath
         controller.opmode = settings.opmode
-        controller.vendorTags = settings.vendorTags.map { CameraController.VendorTagSpec(it.name, it.scope, it.type, it.value) }
+        controller.vendorTags = settings.vendorTags.map { CameraController.VendorTagSpec(it.name, it.scope, it.type, it.value, it.lens) }
+        controller.opmodeLens = settings.opmodeLens
         controller.saveJpeg = settings.saveJpeg
         controller.inSensorZoomJpeg = settings.inSensorZoomJpeg
         controller.teleZoomDirect = settings.teleZoomDirect
@@ -252,7 +253,9 @@ fun CameraScreen(
                 if (settings.inSensorZoomJpeg && controls.zoom > 1.001f) "ISZ" else null,
                 if (settings.burstMode) "BURST" else null, if (settings.timerSeconds > 0) "${settings.timerSeconds}S" else null,
             )
-            if (modes.isNotEmpty()) Text(modes.joinToString(" · "), color = LatentColors.Amber, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp))
+            val tagLabels = remember(settings.vendorTags, lens) { if (controller.hasCharacteristics) controller.activeTagLabels() else emptyList() }
+            val allLabels = modes + tagLabels
+            if (allLabels.isNotEmpty()) Text(allLabels.joinToString(" · "), color = LatentColors.Amber, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp))
             if (controls.locked) Text("AE/AF LOCK", color = LatentColors.AmberInk, fontSize = 11.sp, letterSpacing = 1.sp,
                 modifier = Modifier.align(Alignment.TopCenter).padding(8.dp).clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).padding(horizontal = 10.dp, vertical = 4.dp))
             if (countdown > 0) Text("$countdown", color = LatentColors.TextBright, fontSize = 64.sp, modifier = Modifier.align(Alignment.Center))

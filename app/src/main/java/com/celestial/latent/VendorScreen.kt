@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.celestial.latent.camera.Lenses
 import com.celestial.latent.ui.LatentColors
 
 /**
@@ -51,11 +52,12 @@ fun VendorScreen(settings: AppSettings, exposedKeys: List<Pair<String, String>>,
         Text("‹ settings", color = LatentColors.Text, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onBack).padding(vertical = 6.dp))
         Spacer(Modifier.height(8.dp))
         Text("Vendor tags", color = LatentColors.TextBright, fontSize = 24.sp)
-        Text("Path: camera ${settings.cameraPath}. Keys differ per path and lens. Changes apply on the next lens switch.", color = LatentColors.TextDim, fontSize = 12.sp)
+        Text("Path: camera ${settings.cameraPath}. Each tag applies only to the lens you choose for it — a sensor mode valid on one lens will break another.", color = LatentColors.TextDim, fontSize = 12.sp)
         Spacer(Modifier.height(16.dp))
 
         Text("CUSTOM OPMODE", color = LatentColors.TextDim, fontSize = 11.sp, letterSpacing = 2.sp)
         Text("Vendor session operating mode. 0 keeps the regular session. Decimal or hex (0x8001).", color = LatentColors.TextDim, fontSize = 12.sp)
+        LensPicker(settings.opmodeLens) { onChange(settings.copy(opmodeLens = it)) }
         Field(opmodeText, { t ->
             opmodeText = t
             val v = t.trim().let { if (it.startsWith("0x", true)) it.substring(2).toIntOrNull(16) else it.toIntOrNull() }
@@ -71,6 +73,7 @@ fun VendorScreen(settings: AppSettings, exposedKeys: List<Pair<String, String>>,
                     Chips(listOf("session", "request"), tag.scope) { onChange(settings.copy(vendorTags = settings.vendorTags.toMutableList().also { l -> l[i] = tag.copy(scope = it) })) }
                     Chips(listOf("i32", "i64", "f32", "f64", "u8"), tag.type) { onChange(settings.copy(vendorTags = settings.vendorTags.toMutableList().also { l -> l[i] = tag.copy(type = it) })) }
                 }
+                LensPicker(tag.lens) { onChange(settings.copy(vendorTags = settings.vendorTags.toMutableList().also { l -> l[i] = tag.copy(lens = it) })) }
                 Row {
                     Column(Modifier.weight(1f)) {
                         Field(tag.value, { onChange(settings.copy(vendorTags = settings.vendorTags.toMutableList().also { l -> l[i] = tag.copy(value = it) })) }, "value, or 4/12/24 for arrays", KeyboardType.Text)
@@ -128,6 +131,21 @@ private fun Chips(options: List<String>, selected: String, onSelect: (String) ->
             Text(o, color = if (on) LatentColors.AmberInk else LatentColors.Text, fontSize = 12.sp,
                 modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(if (on) LatentColors.Amber else LatentColors.Background)
                     .combinedClickable(onClick = { onSelect(o) }).padding(horizontal = 10.dp, vertical = 5.dp))
+        }
+    }
+}
+
+
+/** Which lens a tag (or the opmode) applies to. */
+@Composable
+private fun LensPicker(selected: String, onSelect: (String) -> Unit) {
+    Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("lens", color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.padding(end = 2.dp, top = 5.dp))
+        (listOf("all" to "all") + Lenses.ALL.map { it.physicalId to it.label }).forEach { (id, label) ->
+            val on = id == selected
+            Text(label, color = if (on) LatentColors.AmberInk else LatentColors.Text, fontSize = 12.sp,
+                modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(if (on) LatentColors.Amber else LatentColors.Background)
+                    .combinedClickable(onClick = { onSelect(id) }).padding(horizontal = 10.dp, vertical = 5.dp))
         }
     }
 }

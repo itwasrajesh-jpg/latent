@@ -74,6 +74,8 @@ class CameraController(
     private var logicalId: String = Lenses.LOGICAL_ID
     /** Vendor overrides (MotionCam-style). Applied at session creation / in every request. */
     @Volatile var opmode: Int = 0
+    @Volatile var opmodeLens: String = "all"
+    private val activeOpmode get() = if (opmode != 0 && (opmodeLens == "all" || opmodeLens == lens.physicalId)) opmode else 0
     @Volatile var vendorTags: List<VendorTagSpec> = emptyList()
     /** Built-in feature: Qualcomm in-sensor zoom for the JPEG path. */
     @Volatile var inSensorZoomJpeg = false
@@ -84,7 +86,7 @@ class CameraController(
     private var ultraHdrUnsupported = false
     /** Everything that requires a new session if it changes. */
     private fun sessionSignature() = listOf(
-        lens.physicalId, cameraPath, opmode.toString(), wantJpeg.toString(),
+        lens.physicalId, cameraPath, activeOpmode.toString(), wantJpeg.toString(),
         allTags().joinToString { it.name + it.scope + it.type + it.value },
         (teleZoomDirect && controls.zoom > 1.001f && lens.physicalId != "2").toString(),
     ).joinToString("|")
@@ -103,7 +105,8 @@ class CameraController(
     private val ISZ_KEY = "org.codeaurora.qcamera3.sessionParameters.EnableInsensorZoom"
     /** User tags plus, only while ×2 is actually on, the in-sensor-zoom hint. Nothing else is ever sent. */
     private fun allTags(): List<VendorTagSpec> {
-        val out = ArrayList(vendorTags.filter { it.name.isNotBlank() })
+        // Only the tags meant for this lens: a sensor mode valid on one sensor breaks the others.
+        val out = ArrayList(vendorTags.filter { it.name.isNotBlank() && (it.lens == "all" || it.lens == lens.physicalId) })
         if (inSensorZoomJpeg && controls.zoom > 1.001f && out.none { it.name == ISZ_KEY }) out += VendorTagSpec(ISZ_KEY, "session", "i32", "1")
         return out
     }
@@ -221,7 +224,7 @@ class CameraController(
         outputs += OutputConfiguration(reader.surface)
         jpegReader?.let { outputs += OutputConfiguration(it.surface) }
         if (!directOpen) outputs.forEach { it.setPhysicalCameraId(lens.physicalId) }
-        val sessionType = if (opmode != 0) opmode else SessionConfiguration.SESSION_REGULAR
+        val sessionType = if (activeOpmode != 0) activeOpmode else SessionConfiguration.SESSION_REGULAR
         val config = SessionConfiguration(sessionType, outputs, executor, object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(s: CameraCaptureSession) { opening = false; log("session configured: ${outputs.size} streams, opmode=${if (opmode != 0) "0x" + Integer.toHexString(opmode) else "regular"}, tags=${allTags().map { it.name.substringAfterLast('.') + "=" + it.value }}"); session = s; startPreview() }
             override fun onConfigureFailed(s: CameraCaptureSession) {
@@ -241,7 +244,7 @@ class CameraController(
                 sessionTags.forEach { applyVendorTag(sp, it) }
                 config.sessionParameters = sp.build()
             }
-            if (opmode != 0) log("session opmode 0x${Integer.toHexString(opmode)}")
+            if (activeOpmode != 0) log("session opmode 0x${Integer.toHexString(activeOpmode)} (lens ${lens.physicalId})")
             dev.createCaptureSession(config)
         } catch (e: Exception) {
             opening = false
@@ -708,7 +711,7 @@ class CameraController(
 
     // ---- vendor tags ----------------------------------------------------------------
 
-    data class VendorTagSpec(val name: String, val scope: String, val type: String, val value: String)
+    data class VendorTagSpec(val name: String, val scope: String, val type: String, val value: String, val lens: String = "all")
 
     private fun parseNums(v: String): List<String> = v.split(',', '/', ' ').map { it.trim() }.filter { it.isNotEmpty() }
 
@@ -735,9 +738,9 @@ class CameraController(
     /** Reads back every configured tag from the capture result so the user can see what the driver actually did. */
     private fun echoVendorTags(result: TotalCaptureResult) {
         val tags = allTags().filter { it.name.isNotBlank() }
-        if (tags.isEmpty() && opmode == 0) return
+        if (tags.isEmpty() && activeOpmode == 0) return
         val sb = StringBuilder()
-        if (opmode != 0) sb.appendLine("opmode 0x${Integer.toHexString(opmode)} · session ${if (directOpen) "direct" else "via $logicalId"}")
+        if (activeOpmode != 0) sb.appendLine("opmode 0x${Integer.toHexString(activeOpmode)} · session ${if (directOpen) "direct" else "via $logicalId"}")
         for (t in tags) {
             val v: Any? = try {
                 val r = metaFor(result)
@@ -749,13 +752,16 @@ class CameraController(
                     else -> r.get(CaptureResult.Key(t.name, ByteArray::class.java))?.joinToString() ?: r.get(CaptureResult.Key(t.name, Byte::class.javaObjectType))
                 }
             } catch (e: Exception) { "<${e.javaClass.simpleName}>" }
-            sb.appendLine("${t.name.substringAfterLast('.')} (${t.scope}/${t.type}) sent=${t.value} → result=${v ?: "not reported"}")
+            sb.appendLine("${t.name.substringAfterLast('.')} (${t.scope}/${t.type}/lens ${t.lens}) sent=${t.value} → result=${v ?: "not reported"}")
         }
         val text = sb.toString().trim()
         log(text); onVendorEcho(text)
     }
 
     /** Vendor keys the driver advertises for the current lens/path: name -> session/request/both. */
+    /** Short names of the vendor tags actually being sent for the current lens (for the viewfinder caption). */
+    fun activeTagLabels(): List<String> = allTags().map { it.name.substringAfterLast('.') + "=" + it.value }
+
     fun exposedVendorKeys(): List<Pair<String, String>> {
         if (!hasCharacteristics) return emptyList()
         val chars = listOfNotNull(physChars, if (!directOpen) runCatching { cm.getCameraCharacteristics(logicalId) }.getOrNull() else null)
