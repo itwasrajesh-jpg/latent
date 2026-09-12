@@ -90,11 +90,13 @@ class CameraController(
         inSensorZoomJpeg.toString(), dcgMode.toString(), sensorShdr.toString(), vendorTags.joinToString { it.name + it.scope + it.type + it.value },
     ).joinToString("|")
     private var openSignature: String? = null
+    @Volatile private var opening = false
 
     /** Rebuilds the session if any stream- or tag-affecting setting changed since it was opened. */
     fun syncSession() = handler.post {
         val surf = previewSurface ?: return@post
-        if (device == null || openSignature != sessionSignature()) { log("settings changed → rebuilding session"); open(lens, surf) }
+        if (opening) return@post                      // an open is already in flight; it will use the current settings
+        if (openSignature != sessionSignature()) { log("settings changed → rebuilding session"); open(lens, surf) }
     }
     /** Android's JPEG_R format (Ultra HDR, base JPEG + gain map). Constant kept literal for older compile targets. */
     private val FORMAT_JPEG_R = 4101
@@ -158,6 +160,8 @@ class CameraController(
     fun open(lens: Lens, surface: Surface, attempt: Int = 0) {
         handler.post {
             closeInternal()
+            opening = true
+            openSignature = sessionSignature()        // claim these settings now, so a sync during the open does not loop
             this.lens = lens
             this.previewSurface = surface
             directOpen = cameraPath == "direct" || fallbackDirect
@@ -184,7 +188,6 @@ class CameraController(
                 }
             } else null
                 oisAvailable = physChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true
-                openSignature = sessionSignature()
                 status("Opening ${lens.name} (${lens.label}) · RAW ${rawSize.width}x${rawSize.height}")
                 val idToOpen = if (directOpen) lens.physicalId else logicalId
                 cm.openCamera(idToOpen, object : CameraDevice.StateCallback() {
@@ -192,6 +195,7 @@ class CameraController(
                     override fun onDisconnected(cam: CameraDevice) { log("camera disconnected (background or another app took it)"); try { session?.close() } catch (_: Exception) {}; session = null; cam.close(); device = null }
                     override fun onError(cam: CameraDevice, error: Int) {
                         cam.close(); device = null
+                        opening = false
                         if (jpegIsUltraHdr) {
                             // RAW + JPEG_R + preview is not a supported stream combination here.
                             ultraHdrUnsupported = true
@@ -202,6 +206,7 @@ class CameraController(
                     }
                 }, handler)
             } catch (e: Exception) {
+                opening = false
                 // Typically the camera service restarting after a driver crash: IDs vanish for a moment.
                 if (attempt < 10) {
                     status("Camera service restarting… (${attempt + 1}/10)")
@@ -225,8 +230,9 @@ class CameraController(
         if (!directOpen) outputs.forEach { it.setPhysicalCameraId(lens.physicalId) }
         val sessionType = if (opmode != 0) opmode else SessionConfiguration.SESSION_REGULAR
         val config = SessionConfiguration(sessionType, outputs, executor, object : CameraCaptureSession.StateCallback() {
-            override fun onConfigured(s: CameraCaptureSession) { log("session configured: ${outputs.size} streams, opmode=${if (opmode != 0) "0x" + Integer.toHexString(opmode) else "regular"}, tags=${allTags().map { it.name.substringAfterLast('.') + "=" + it.value }}"); session = s; startPreview() }
+            override fun onConfigured(s: CameraCaptureSession) { opening = false; log("session configured: ${outputs.size} streams, opmode=${if (opmode != 0) "0x" + Integer.toHexString(opmode) else "regular"}, tags=${allTags().map { it.name.substringAfterLast('.') + "=" + it.value }}"); session = s; startPreview() }
             override fun onConfigureFailed(s: CameraCaptureSession) {
+                opening = false
                 if (!directOpen) {
                     log("session via logical camera failed; retrying with direct open of ${lens.physicalId}")
                     fallbackDirect = true
@@ -245,11 +251,16 @@ class CameraController(
             if (opmode != 0) log("session opmode 0x${Integer.toHexString(opmode)}")
             dev.createCaptureSession(config)
         } catch (e: Exception) {
-            if (!directOpen) {
+            opening = false
+            val disconnected = e.message?.contains("DISCONNECTED", ignoreCase = true) == true
+            if (!directOpen && !disconnected) {
                 log("createCaptureSession threw (${e.message}); retrying with direct open of ${lens.physicalId}")
                 fallbackDirect = true
                 val surf = previewSurface!!
                 handler.post { open(lens, surf) }
+            } else if (disconnected) {
+                log("createCaptureSession: device disconnected mid-configure; retrying the same path")
+                handler.postDelayed({ previewSurface?.let { open(lens, it) } }, 400)
             } else status("createCaptureSession: ${e.message}")
         }
     }
