@@ -17,6 +17,8 @@ android {
         targetSdk = 35
         versionCode = buildNumber
         versionName = "0.1.$buildNumber"
+        // The film engine ships native code; arm64 covers every phone we target.
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
 
     signingConfigs {
@@ -45,13 +47,19 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    packaging { jniLibs { useLegacyPackaging = false } }
     buildFeatures {
         compose = true
         buildConfig = true
     }
+
 }
 
 dependencies {
+    // Film engine + RAW decoder, fetched by the build workflow from the pinned mirror (GPLv3 / LGPL).
+    implementation(project(":engine:spektra-core"))
+    implementation(project(":lib:libraw"))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)

@@ -7,3 +7,8 @@ local.properties
 # Real release keys must never be committed. The committed debug.keystore is intentional.
 *.jks
 release.keystore
+
+# Fetched at build time from the pinned spektrafilm mirror — never commit these.
+engine/
+lib/
+ENGINE_LICENSE.txt

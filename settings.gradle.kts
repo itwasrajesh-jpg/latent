@@ -14,3 +14,7 @@ dependencyResolutionManagement {
 }
 rootProject.name = "Latent"
 include(":app")
+
+// Fetched by the build workflow from the pinned spektrafilm mirror. GPLv3 — see NOTICE.md.
+include(":engine:spektra-core")
+include(":lib:libraw")
