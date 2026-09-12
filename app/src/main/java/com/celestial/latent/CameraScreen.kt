@@ -105,6 +105,7 @@ fun CameraScreen(
     var drawerOpen by remember { mutableStateOf(false) }
     var lastUri by remember { mutableStateOf<Uri?>(null) }
     var lastRawUri by remember { mutableStateOf<Uri?>(null) }
+    var glPreview by remember { mutableStateOf<com.celestial.latent.gl.FilmPreviewView?>(null) }
     var thumb by remember { mutableStateOf<Bitmap?>(null) }
     var countdown by remember { mutableStateOf(0) }
     var developing by remember { mutableStateOf(DevelopQueue.queued) }
@@ -163,14 +164,20 @@ fun CameraScreen(
 
     DisposableEffect(Unit) {
         ShutterBus.onShutter = { if (settings.volumeShutter) shoot(single = !settings.burstMode) }
-        onDispose { ShutterBus.onShutter = null; controller.destroy() }
+        onDispose { ShutterBus.onShutter = null; controller.destroy(); glPreview?.release(); glPreview = null }
     }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> { controller.reopenIfNeeded(); controller.syncSession() }
-                Lifecycle.Event.ON_PAUSE -> controller.close()
+                Lifecycle.Event.ON_RESUME -> {
+                    glPreview?.onResume()
+                    // On the GL path the camera is reopened by onSurfaceReady when the new
+                    // surface exists; reopening here would use the destroyed one.
+                    if (glPreview == null) controller.reopenIfNeeded()
+                    controller.syncSession()
+                }
+                Lifecycle.Event.ON_PAUSE -> { controller.close(); glPreview?.onPause() }
                 else -> {}
             }
         }
@@ -242,20 +249,42 @@ fun CameraScreen(
                     )
                 },
         ) {
-            AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
-                TextureView(ctx).apply {
-                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
-                            val size = controller.previewSizeFor(lens)
-                            st.setDefaultBufferSize(size.width, size.height)
-                            val surf = Surface(st); surfaceRef = surf; controller.open(lens, surf)
+            if (settings.filmPreview) {
+                // Our own preview path: camera frames are drawn by a shader, so a film look can
+                // be applied to the live image. Neutral until a look table is supplied.
+                AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
+                    com.celestial.latent.gl.FilmPreviewView(ctx).apply {
+                        val size = controller.previewSizeFor(lens)
+                        setBufferSize(size.width, size.height)
+                        onSurfaceReady = { surf, _ ->
+                            surfaceRef = surf
+                            controller.log("viewfinder: film preview path")
+                            controller.open(lens, surf)
                         }
-                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {}
-                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { surfaceRef = null; controller.close(); return true }
-                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                        glPreview = this
                     }
-                }
-            })
+                }, update = { view ->
+                    val size = controller.previewSizeFor(lens)
+                    view.setBufferSize(size.width, size.height)
+                })
+            } else {
+                AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
+                    TextureView(ctx).apply {
+                        surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                            override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
+                                val size = controller.previewSizeFor(lens)
+                                st.setDefaultBufferSize(size.width, size.height)
+                                val surf = Surface(st); surfaceRef = surf
+                                controller.log("viewfinder: plain preview path")
+                                controller.open(lens, surf)
+                            }
+                            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {}
+                            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { surfaceRef = null; controller.close(); return true }
+                            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                        }
+                    }
+                })
+            }
             if (settings.gridlines) {
                 Canvas(Modifier.fillMaxSize()) {
                     val c = Color(0x66FFFFFF); val w = size.width; val h = size.height
@@ -270,7 +299,14 @@ fun CameraScreen(
                 onDismiss = { focusTap = null },
             )
             // Quiet captions overlaid on the image.
-            Text(if (settings.saveJpeg) "RAW + JPG · 12.5M" else "RAW · 12.5M", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
+            Column(Modifier.align(Alignment.TopStart).padding(12.dp)) {
+                Text(if (settings.saveJpeg) "RAW + JPG · 12.5M" else "RAW · 12.5M", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp)
+                // Says plainly what the live image is and is not, without crowding the frame.
+                if (settings.filmPreview) Text(
+                    (Develop.FILMS.firstOrNull { it.first == settings.film }?.second ?: "FILM").uppercase() + " · COLOUR ONLY",
+                    color = LatentColors.TextDim, fontSize = 9.sp, letterSpacing = 1.5.sp, modifier = Modifier.padding(top = 3.dp),
+                )
+            }
             val modes = listOfNotNull(
                 if (settings.inSensorZoomJpeg && controls.zoom > 1.001f) "ISZ" else null,
                 if (settings.burstMode) "BURST" else null, if (settings.timerSeconds > 0) "${settings.timerSeconds}S" else null,

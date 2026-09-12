@@ -801,7 +801,7 @@ class CameraController(
     fun destroy() { close(); handler.post { thread.quitSafely() } }
 
     private fun status(s: String) { Log.i("Latent", s); onStatus(s) }
-    private fun log(s: String) { Log.i("Latent", s); onLog(s) }
+    internal fun log(s: String) { Log.i("Latent", s); onLog(s) }
 
     /** Accumulates a burst with alignment: frame 1 is the reference, later frames are shifted and tile-checked. */
     private inner class BurstJob(val frames: Int, val w: Int, val h: Int, val startNs: Long) {

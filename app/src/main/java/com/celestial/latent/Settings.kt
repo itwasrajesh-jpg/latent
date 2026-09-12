@@ -38,6 +38,7 @@ data class AppSettings(
     val haptics: Boolean = true,
     val film: String = "kodak_portra_400",   // film used for the live preview and auto-develop
     val autoDevelop: Boolean = true,         // develop single shots in the background (never bursts)
+    val filmPreview: Boolean = true,         // draw the viewfinder ourselves so the film look can be shown
 ) {
     companion object {
         const val ANTIBANDING_OFF = 0
@@ -68,6 +69,7 @@ data class AppSettings(
                 haptics = p.getBoolean("haptics", true),
                 film = p.getString("film", "kodak_portra_400") ?: "kodak_portra_400",
                 autoDevelop = p.getBoolean("autoDevelop", true),
+                filmPreview = p.getBoolean("filmPreview", true),
             )
         }
 
@@ -91,6 +93,7 @@ data class AppSettings(
                 .putBoolean("haptics", s.haptics)
                 .putString("film", s.film)
                 .putBoolean("autoDevelop", s.autoDevelop)
+                .putBoolean("filmPreview", s.filmPreview)
                 .apply()
         }
     }
