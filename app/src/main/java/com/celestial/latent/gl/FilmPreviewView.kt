@@ -72,6 +72,10 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
         @Volatile var exposureGain = 1f
         private var lutTexture = 0
         private var lutSize = 0
+        // Two samplers of different kinds must never share a texture unit: with no look table
+        // yet, the look sampler still needs a real 2D texture bound to unit 1, or the driver
+        // rejects every draw (GL_INVALID_OPERATION) and the preview stays black.
+        private var placeholderTexture = 0
         private var reportedError = false
         private val frames = java.util.concurrent.atomic.AtomicInteger(0)
 
@@ -86,6 +90,7 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             release()
             lutTexture = 0
             lutSize = 0
+            placeholderTexture = 0
             reportedError = false
             frames.set(0)
             program = buildProgram(VERTEX_SHADER, FRAGMENT_SHADER)
@@ -99,6 +104,15 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
             check("external texture setup")
+
+            GLES20.glGenTextures(1, ids, 0)
+            placeholderTexture = ids[0]
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, placeholderTexture)
+            val white = java.nio.ByteBuffer.allocateDirect(4).put(byteArrayOf(-1, -1, -1, -1)).apply { rewind() }
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, 1, 1, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, white)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST)
+            check("placeholder texture setup")
 
             val st = SurfaceTexture(texture)
             st.setDefaultBufferSize(bufW, bufH)
@@ -147,11 +161,11 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texture)
             GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uCamera"), 0)
-            if (lutSize > 0) {
-                GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
-                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lutTexture)
-                GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uLut"), 1)
-            }
+            // Unit 1 always carries a 2D texture: the look table when there is one, the 1x1
+            // stand-in otherwise.
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, if (lutSize > 0) lutTexture else placeholderTexture)
+            GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uLut"), 1)
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             if (!reportedError && frames.get() > 0) {
