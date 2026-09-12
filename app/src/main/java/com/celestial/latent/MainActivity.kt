@@ -157,7 +157,6 @@ private fun Root() {
             onOpenDarkroom = { uri, isRaw -> darkroomSource = uri; darkroomIsRaw = isRaw; screen = "darkroom" },
             onOpenSettings = { screen = "settings" },
             onOpenExtension = { screen = "extension" },
-            onOpenAbout = { screen = "about" },
             onLensChanged = { l -> if (settings.rememberLens) { settings = settings.copy(defaultLensId = l.physicalId); AppSettings.save(context, settings) } },
             onController = { c -> controllerRef = c },
             onVendorEcho = { e -> vendorEcho = e },
