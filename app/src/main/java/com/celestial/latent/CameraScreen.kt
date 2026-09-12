@@ -251,7 +251,7 @@ fun CameraScreen(
                 onDismiss = { focusTap = null },
             )
             // Quiet captions overlaid on the image.
-            Text(if (settings.saveJpeg) "RAW + JPG · 12.5M" else "RAW · 12.5M", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
+            Text(if (settings.saveJpeg || settings.ultraHdrJpeg || settings.betterJpeg) "RAW + JPG · 12.5M" else "RAW · 12.5M", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
             val modes = listOfNotNull(
                 if (settings.inSensorZoomJpeg) "ISZ" else null, if (settings.dcgMode) "DCG" else null, if (settings.sensorShdr) "SHDR" else null,
                 if (settings.betterJpeg) "JPG+" else null, if (settings.ultraHdrJpeg) "UHDR" else null,

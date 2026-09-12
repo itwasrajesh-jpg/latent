@@ -65,8 +65,8 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
             title = "Format",
             subtitle = "RAW is always saved. The JPEG is the camera driver's own processed copy, handy for sharing; it is not the film-developed result.",
             options = listOf("RAW" to false, "RAW + JPEG" to true),
-            selected = settings.saveJpeg,
-        ) { onChange(settings.copy(saveJpeg = it)) }
+            selected = settings.saveJpeg || settings.ultraHdrJpeg || settings.betterJpeg,
+        ) { onChange(settings.copy(saveJpeg = it, ultraHdrJpeg = if (!it) false else settings.ultraHdrJpeg, betterJpeg = if (!it) false else settings.betterJpeg)) }
 
         Section("Shooting")
         ToggleRow("2x in-sensor zoom (JPEG)", "Uses the sensor's native centre crop for the 2x JPEG on lenses that support it. Turns on RAW + JPEG. The RAW file stays 1x for now.", settings.inSensorZoomJpeg) {

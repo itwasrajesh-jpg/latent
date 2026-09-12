@@ -92,6 +92,9 @@ fun ProbeScreen(settings: AppSettings, onBack: () -> Unit) {
             Btn("Sensor mode sweep 0–63 on ${settings.cameraPath}/${lens.physicalId}", !running) {
                 run { probe.sensorModeSweep(settings.cameraPath, lens, 0, 63) { p -> progress = p } }
             }
+            Btn("A/B test: does DCG / HDR actually do anything?", !running) {
+                run { probe.abTest(settings.cameraPath, lens) { p -> progress = p } }
+            }
             Btn("Quality probe (DCG/HDR/routing)", !running) {
                 run { probe.qualityProbe(settings.cameraPath, lens) { p -> progress = p } }
             }

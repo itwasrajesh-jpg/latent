@@ -264,6 +264,48 @@ class VendorProbe(private val context: Context) {
         return r
     }
 
+    /**
+     * A/B test: same scene, locked exposure, one frame with the key and one without, repeated,
+     * and the RAW measured each time. This is the only honest evidence that a mode does anything.
+     */
+    fun abTest(path: String, lens: Lens, progress: (String) -> Unit): String {
+        val P = "org.codeaurora.qcamera3.sessionParameters."
+        val modes = listOf(
+            "DCG" to (P + "EnableHDRDCGMode"),
+            "Staggered HDR" to (P + "inSensorSHDRMode"),
+            "Multi-frame HDR" to (P + "EnableMFHDR"),
+            "Snapshot HDR" to (P + "SnapshotHDRMode"),
+            "Multi-frame NR" to (P + "enableMFNR"),
+            "Ideal RAW" to (P + "EnableIdealRAW"),
+        )
+        val sb = StringBuilder("LATENT A/B TEST · path=$path lens=${lens.physicalId} (${lens.name})\nKeep the phone still and the scene unchanged.\n")
+        progress("metering…")
+        val auto = runOneRetry(path, lens, null, 1f)
+        if (!auto.ok || auto.exposureNs == 0L) return sb.appendLine("could not meter: $auto").toString()
+        val lock = auto.exposureNs to auto.iso
+        sb.appendLine("locked at ${auto.exposure}, ISO ${auto.iso}\n")
+        for ((label, key) in modes) {
+            progress(label)
+            val off1 = runOne(path, lens, null, 1f, 1, lock)
+            val on = runOneRetry2(path, lens, key, 1f, 1, lock)
+            val off2 = runOne(path, lens, null, 1f, 1, lock)
+            if (!on.ok) { sb.appendLine("$label: FAILED (${on.note})"); continue }
+            if (!off1.ok || !off2.ok) { sb.appendLine("$label: baseline failed"); continue }
+            // Two "off" frames give us the natural variation, so we only call a change real if it exceeds it.
+            val offNoise = (off1.shadowNoise + off2.shadowNoise) / 2
+            val drift = Math.abs(off1.shadowNoise - off2.shadowNoise)
+            val offClip = (off1.clipped + off2.clipped) / 2
+            val noiseChange = if (offNoise > 0) (on.shadowNoise - offNoise) / offNoise * 100 else 0f
+            val real = Math.abs(on.shadowNoise - offNoise) > Math.max(drift * 1.5f, offNoise * 0.12f)
+            val levels = if (on.whiteLevel != off1.whiteLevel || on.blackLevel != off1.blackLevel) " · LEVELS CHANGED (${off1.whiteLevel}→${on.whiteLevel})" else ""
+            val clipTxt = if (offClip > 0.0005f) " · clipping %.2f%%→%.2f%%".format(offClip * 100, on.clipped * 100) else ""
+            sb.appendLine("$label: shadow noise %.2f (off, ±%.2f) → %.2f (on) = %+.0f%% · %s%s%s".format(
+                offNoise, drift, on.shadowNoise, noiseChange, if (real) (if (noiseChange < 0) "REAL IMPROVEMENT" else "REAL CHANGE (worse)") else "no measurable effect", levels, clipTxt))
+        }
+        sb.appendLine("\nA mode with 'no measurable effect' is being ignored by the driver for third-party apps.")
+        return sb.toString()
+    }
+
     /** Sweep sensor mode indices via sensor_meta_data.current_mode (request scope). */
     @SuppressLint("MissingPermission")
     fun sensorModeSweep(path: String, lens: Lens, from: Int, to: Int, progress: (String) -> Unit): String {

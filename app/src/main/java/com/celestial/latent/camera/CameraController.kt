@@ -91,6 +91,8 @@ class CameraController(
     ).joinToString("|")
     private var openSignature: String? = null
     @Volatile private var opening = false
+    /** Ultra HDR and Better JPEG are JPEG features: either of them implies saving a JPEG. */
+    private val wantJpeg get() = saveJpeg || ultraHdrJpeg || betterJpeg
 
     /** Rebuilds the session if any stream- or tag-affecting setting changed since it was opened. */
     fun syncSession() = handler.post {
@@ -176,7 +178,7 @@ class CameraController(
                 }
                 jpegIsUltraHdr = ultraHdrJpeg && !ultraHdrUnsupported && Build.VERSION.SDK_INT >= 34 &&
                 map.outputFormats.contains(FORMAT_JPEG_R) && (map.getOutputSizes(FORMAT_JPEG_R)?.isNotEmpty() == true)
-            jpegReader = if (saveJpeg) {
+            jpegReader = if (wantJpeg) {
                 val fmt = if (jpegIsUltraHdr) FORMAT_JPEG_R else ImageFormat.JPEG
                 val allSizes = map.getOutputSizes(fmt)?.toList().orEmpty()
                 val sameAspect = allSizes.filter { Math.abs(it.width.toFloat() / it.height - rawSize.width.toFloat() / rawSize.height) < 0.02f }
@@ -465,7 +467,7 @@ class CameraController(
         try {
             busy = true
             val t0 = System.nanoTime()
-            s.capture(stillRequest(withJpeg = saveJpeg && !hdrJpegSequential).build(), object : CameraCaptureSession.CaptureCallback() {
+            s.capture(stillRequest(withJpeg = wantJpeg && !hdrJpegSequential).build(), object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(sess: CameraCaptureSession, req: CaptureRequest, result: TotalCaptureResult) {
                     onResult(result, t0)
                     echoVendorTags(result)
@@ -484,7 +486,7 @@ class CameraController(
         try {
             val job = BurstJob(frames, rawSize.width, rawSize.height, System.nanoTime())
             burst = job
-            val reqs = List(frames) { i -> stillRequest(withJpeg = saveJpeg && i == 0).build() }
+            val reqs = List(frames) { i -> stillRequest(withJpeg = wantJpeg && !hdrJpegSequential && i == 0).build() }
             s.captureBurst(reqs, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(sess: CameraCaptureSession, req: CaptureRequest, result: TotalCaptureResult) { onResult(result, null) }
                 override fun onCaptureFailed(sess: CameraCaptureSession, req: CaptureRequest, failure: android.hardware.camera2.CaptureFailure) {
@@ -625,6 +627,20 @@ class CameraController(
         pendingJpegs.keys.filter { ts - it > 5_000_000_000L }.forEach { pendingJpegs.remove(it); log("jpeg ts=$it never matched a RAW; dropped") }
     }
 
+    /** Does this JPEG carry an Ultra HDR gain map? Looks for the MPF multi-picture marker and the hdrgm XMP. */
+    private fun hasGainMap(b: ByteArray): Boolean {
+        fun find(needle: ByteArray): Boolean {
+            outer@ for (i in 0..b.size - needle.size) {
+                for (j in needle.indices) if (b[i + j] != needle[j]) continue@outer
+                return true
+            }
+            return false
+        }
+        val mpf = find("MPF\u0000".toByteArray(Charsets.ISO_8859_1))
+        val hdrgm = find("hdrgm:".toByteArray(Charsets.ISO_8859_1)) || find("GainMap".toByteArray(Charsets.ISO_8859_1))
+        return mpf && hdrgm
+    }
+
     private fun saveJpegBytes(base: String, bytes: ByteArray) {
         try {
             val values = ContentValues().apply {
@@ -638,13 +654,14 @@ class CameraController(
             resolver.openOutputStream(uri)!!.use { it.write(bytes) }
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
-            log("saved $base.jpg (${bytes.size / 1024} KB)")
+            val gm = hasGainMap(bytes)
+            log("saved $base.jpg (${bytes.size / 1024} KB) · Ultra HDR: " + (if (gm) "GAIN MAP PRESENT — real HDR" else "no gain map — plain JPEG"))
             onSaved(uri)
         } catch (e: Exception) { log("jpeg save: ${e.message}") }
     }
 
     /** True when Ultra HDR is wanted but cannot share a session with RAW: capture it as a second step. */
-    private val hdrJpegSequential get() = ultraHdrJpeg && saveJpeg && ultraHdrUnsupported
+    private val hdrJpegSequential get() = ultraHdrJpeg && ultraHdrUnsupported
 
     private var hdrReader: ImageReader? = null
 
