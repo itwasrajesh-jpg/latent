@@ -84,6 +84,18 @@ class CameraController(
     private var jpegIsUltraHdr = false
     /** Set once a JPEG_R session has failed on this device: RAW + Ultra HDR + preview is not a supported combination. */
     private var ultraHdrUnsupported = false
+    /** Everything that requires a new session if it changes. */
+    private fun sessionSignature() = listOf(
+        lens.physicalId, cameraPath, opmode.toString(), saveJpeg.toString(), ultraHdrJpeg.toString(), betterJpeg.toString(),
+        inSensorZoomJpeg.toString(), dcgMode.toString(), sensorShdr.toString(), vendorTags.joinToString { it.name + it.scope + it.type + it.value },
+    ).joinToString("|")
+    private var openSignature: String? = null
+
+    /** Rebuilds the session if any stream- or tag-affecting setting changed since it was opened. */
+    fun syncSession() = handler.post {
+        val surf = previewSurface ?: return@post
+        if (device == null || openSignature != sessionSignature()) { log("settings changed → rebuilding session"); open(lens, surf) }
+    }
     /** Android's JPEG_R format (Ultra HDR, base JPEG + gain map). Constant kept literal for older compile targets. */
     private val FORMAT_JPEG_R = 4101
     private val MFNR_KEY = "org.codeaurora.qcamera3.sessionParameters.enableMFNR"
@@ -172,6 +184,7 @@ class CameraController(
                 }
             } else null
                 oisAvailable = physChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true
+                openSignature = sessionSignature()
                 status("Opening ${lens.name} (${lens.label}) · RAW ${rawSize.width}x${rawSize.height}")
                 val idToOpen = if (directOpen) lens.physicalId else logicalId
                 cm.openCamera(idToOpen, object : CameraDevice.StateCallback() {
@@ -433,26 +446,30 @@ class CameraController(
         }
     }
 
+    @Volatile private var busy = false
+
     fun captureSingle() = handler.post {
         val s = session ?: return@post
+        if (busy) { log("shutter ignored: still saving the previous shot"); return@post }
         try {
+            busy = true
             val t0 = System.nanoTime()
-            s.capture(stillRequest(withJpeg = saveJpeg).build(), object : CameraCaptureSession.CaptureCallback() {
+            s.capture(stillRequest(withJpeg = saveJpeg && !hdrJpegSequential).build(), object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(sess: CameraCaptureSession, req: CaptureRequest, result: TotalCaptureResult) {
                     onResult(result, t0)
                     echoVendorTags(result)
                 }
                 override fun onCaptureFailed(sess: CameraCaptureSession, req: CaptureRequest, failure: android.hardware.camera2.CaptureFailure) {
-                    status("capture failed (reason ${failure.reason})")
+                    busy = false; status("capture failed (reason ${failure.reason})")
                 }
             }, handler)
             status("Capturing…")
-        } catch (e: Exception) { status("capture: ${e.message}") }
+        } catch (e: Exception) { busy = false; status("capture: ${e.message}") }
     }
 
     fun captureBurst(frames: Int = 16) = handler.post {
         val s = session ?: return@post
-        if (burst != null) { status("burst already running"); return@post }
+        if (burst != null || busy) { status("busy"); return@post }
         try {
             val job = BurstJob(frames, rawSize.width, rawSize.height, System.nanoTime())
             burst = job
@@ -506,6 +523,7 @@ class CameraController(
                 if (controls.zoom != 1f) log("2x: JPEG ${if (inSensorZoomJpeg) "in-sensor crop" else "digital crop"} · RAW is the full 1x frame")
                 val took = t0?.let { (System.nanoTime() - it) / 1_000_000 } ?: -1
                 status("Saved $name (${img.width}x${img.height}) · shutter→file ${took} ms · write $ms ms")
+                if (hdrJpegSequential) captureHdrJpeg(base) else busy = false
             } else {
                 job.accept(img, result)
                 if (job.received + job.failed >= job.frames) finishBurst(job)
@@ -614,6 +632,61 @@ class CameraController(
         } catch (e: Exception) { log("jpeg save: ${e.message}") }
     }
 
+    /** True when Ultra HDR is wanted but cannot share a session with RAW: capture it as a second step. */
+    private val hdrJpegSequential get() = ultraHdrJpeg && saveJpeg && ultraHdrUnsupported
+
+    private var hdrReader: ImageReader? = null
+
+    /** Second stage of one shutter press: rebuild as preview + JPEG_R, take the HDR JPEG, rebuild back. */
+    private fun captureHdrJpeg(base: String) {
+        val dev0 = device; val prev = previewSurface
+        if (dev0 == null || prev == null || Build.VERSION.SDK_INT < 34) { busy = false; return }
+        status("HDR JPEG…")
+        try {
+            val map = physChars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
+            val sizes = map.getOutputSizes(FORMAT_JPEG_R)?.toList().orEmpty()
+            val same = sizes.filter { Math.abs(it.width.toFloat() / it.height - rawSize.width.toFloat() / rawSize.height) < 0.02f }
+            val size = (same.ifEmpty { sizes }).maxByOrNull { it.width.toLong() * it.height }
+            if (size == null) { busy = false; return }
+            hdrReader?.close()
+            hdrReader = ImageReader.newInstance(size.width, size.height, FORMAT_JPEG_R, 2).also { r ->
+                r.setOnImageAvailableListener({ rr ->
+                    rr.acquireNextImage()?.let { img ->
+                        try {
+                            val buf = img.planes[0].buffer; val bytes = ByteArray(buf.remaining()); buf.get(bytes)
+                            saveJpegBytes(base + "_HDR", bytes)
+                            log("HDR JPEG ${img.width}x${img.height} ${bytes.size / 1024} KB")
+                        } catch (e: Exception) { log("hdr jpeg: ${e.message}") } finally { img.close() }
+                    }
+                    // Back to the normal RAW session.
+                    handler.postDelayed({ busy = false; previewSurface?.let { open(lens, it) } }, 150)
+                }, handler)
+            }
+            try { session?.close() } catch (_: Exception) {}
+            session = null
+            val outs = ArrayList<OutputConfiguration>()
+            outs += OutputConfiguration(prev); outs += OutputConfiguration(hdrReader!!.surface)
+            if (!directOpen) outs.forEach { it.setPhysicalCameraId(lens.physicalId) }
+            val cfg = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, outs, executor, object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(s2: CameraCaptureSession) {
+                    try {
+                        val req = dev0.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                            addTarget(hdrReader!!.surface); applyControls(this)
+                            set(CaptureRequest.JPEG_ORIENTATION, physChars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90)
+                            set(CaptureRequest.JPEG_QUALITY, 100.toByte())
+                        }
+                        s2.capture(req.build(), null, handler)
+                    } catch (e: Exception) { log("hdr capture: ${e.message}"); busy = false; previewSurface?.let { open(lens, it) } }
+                }
+                override fun onConfigureFailed(s2: CameraCaptureSession) {
+                    log("HDR JPEG session refused; Ultra HDR unavailable on this lens")
+                    busy = false; previewSurface?.let { open(lens, it) }
+                }
+            })
+            dev0.createCaptureSession(cfg)
+        } catch (e: Exception) { log("hdr stage: ${e.message}"); busy = false; previewSurface?.let { open(lens, it) } }
+    }
+
     // ---- vendor tags ----------------------------------------------------------------
 
     data class VendorTagSpec(val name: String, val scope: String, val type: String, val value: String)
@@ -694,6 +767,7 @@ class CameraController(
         device = null
         rawReader?.close(); rawReader = null
         jpegReader?.close(); jpegReader = null
+        hdrReader?.close(); hdrReader = null
         baseNames.clear(); pendingJpegs.clear()
         pendingImages.values.forEach { it.close() }; pendingImages.clear(); pendingResults.clear()
         burst = null

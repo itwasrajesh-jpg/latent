@@ -152,7 +152,7 @@ fun CameraScreen(
     DisposableEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> controller.reopenIfNeeded()
+                Lifecycle.Event.ON_RESUME -> { controller.reopenIfNeeded(); controller.syncSession() }
                 Lifecycle.Event.ON_PAUSE -> controller.close()
                 else -> {}
             }
@@ -161,15 +161,20 @@ fun CameraScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
     LaunchedEffect(settings.antibanding) { controller.setAntibanding(settings.antibanding) }
-    LaunchedEffect(settings.cameraPath) { controller.cameraPath = settings.cameraPath }
-    LaunchedEffect(settings.opmode) { controller.opmode = settings.opmode }
-    LaunchedEffect(settings.vendorTags) { controller.vendorTags = settings.vendorTags.map { CameraController.VendorTagSpec(it.name, it.scope, it.type, it.value) } }
-    LaunchedEffect(settings.saveJpeg) { controller.saveJpeg = settings.saveJpeg }
-    LaunchedEffect(settings.inSensorZoomJpeg) { controller.inSensorZoomJpeg = settings.inSensorZoomJpeg }
-    LaunchedEffect(settings.dcgMode) { controller.dcgMode = settings.dcgMode }
-    LaunchedEffect(settings.sensorShdr) { controller.sensorShdr = settings.sensorShdr }
-    LaunchedEffect(settings.betterJpeg) { controller.betterJpeg = settings.betterJpeg }
-    LaunchedEffect(settings.ultraHdrJpeg) { controller.ultraHdrJpeg = settings.ultraHdrJpeg }
+    // Any of these changes the streams or the session tags: push them, then let the controller rebuild if needed.
+    LaunchedEffect(settings.cameraPath, settings.opmode, settings.vendorTags, settings.saveJpeg, settings.inSensorZoomJpeg,
+        settings.dcgMode, settings.sensorShdr, settings.betterJpeg, settings.ultraHdrJpeg) {
+        controller.cameraPath = settings.cameraPath
+        controller.opmode = settings.opmode
+        controller.vendorTags = settings.vendorTags.map { CameraController.VendorTagSpec(it.name, it.scope, it.type, it.value) }
+        controller.saveJpeg = settings.saveJpeg
+        controller.inSensorZoomJpeg = settings.inSensorZoomJpeg
+        controller.dcgMode = settings.dcgMode
+        controller.sensorShdr = settings.sensorShdr
+        controller.betterJpeg = settings.betterJpeg
+        controller.ultraHdrJpeg = settings.ultraHdrJpeg
+        controller.syncSession()
+    }
     LaunchedEffect(Unit) { controller.onVendorEcho = onVendorEcho; controller.onBurstFinished = { Haptics.click(context) }; onController(controller) }
     LaunchedEffect(settings.haptics) { Haptics.enabled = settings.haptics }
     var toast by remember { mutableStateOf("") }
@@ -280,14 +285,14 @@ fun CameraScreen(
             if (drawerOpen) {
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(8.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xEE2C2C2A)).padding(8.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Tile("In-sensor 2x", settings.inSensorZoomJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(inSensorZoomJpeg = it, saveJpeg = if (it) true else settings.saveJpeg)); reopen() }
-                        Tile("DCG", settings.dcgMode, Modifier.weight(1f)) { onSettingsChange(settings.copy(dcgMode = it)); reopen() }
-                        Tile("Staggered HDR", settings.sensorShdr, Modifier.weight(1f)) { onSettingsChange(settings.copy(sensorShdr = it)); reopen() }
-                        Tile("RAW + JPEG", settings.saveJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(saveJpeg = it, inSensorZoomJpeg = if (!it) false else settings.inSensorZoomJpeg)); reopen() }
+                        Tile("In-sensor 2x", settings.inSensorZoomJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(inSensorZoomJpeg = it, saveJpeg = if (it) true else settings.saveJpeg)) }
+                        Tile("DCG", settings.dcgMode, Modifier.weight(1f)) { onSettingsChange(settings.copy(dcgMode = it)) }
+                        Tile("Staggered HDR", settings.sensorShdr, Modifier.weight(1f)) { onSettingsChange(settings.copy(sensorShdr = it)) }
+                        Tile("RAW + JPEG", settings.saveJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(saveJpeg = it, inSensorZoomJpeg = if (!it) false else settings.inSensorZoomJpeg)) }
                     }
                     Spacer(Modifier.height(6.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Tile("Better JPEG", settings.betterJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(betterJpeg = it, saveJpeg = if (it) true else settings.saveJpeg)); reopen() }
+                        Tile("Better JPEG", settings.betterJpeg, Modifier.weight(1f)) { onSettingsChange(settings.copy(betterJpeg = it, saveJpeg = if (it) true else settings.saveJpeg)) }
                         Tile(if (settings.timerSeconds == 0) "Timer off" else "Timer ${settings.timerSeconds}s", settings.timerSeconds > 0, Modifier.weight(1f)) {
                             onSettingsChange(settings.copy(timerSeconds = when (settings.timerSeconds) { 0 -> 3; 3 -> 10; else -> 0 }))
                         }
