@@ -311,9 +311,13 @@ class CameraController(
             180 -> (1f - u) to (1f - v)
             else -> u to v
         }
-        val half = 0.06f
-        val l = ((sx - half) * active.width()).toInt().coerceIn(0, active.width() - 2)
-        val t = ((sy - half) * active.height()).toInt().coerceIn(0, active.height() - 2)
+        // With a zoom ratio active, the visible field is the centre 1/zoom of the sensor: map the tap into it.
+        val z = controls.zoom.coerceAtLeast(1f)
+        val vx = 0.5f + (sx - 0.5f) / z
+        val vy = 0.5f + (sy - 0.5f) / z
+        val half = 0.06f / z
+        val l = ((vx - half) * active.width()).toInt().coerceIn(0, active.width() - 2)
+        val t = ((vy - half) * active.height()).toInt().coerceIn(0, active.height() - 2)
         val w = (2 * half * active.width()).toInt().coerceAtLeast(2).coerceAtMost(active.width() - l)
         val h = (2 * half * active.height()).toInt().coerceAtLeast(2).coerceAtMost(active.height() - t)
         val r = MeteringRectangle(l, t, w, h, MeteringRectangle.METERING_WEIGHT_MAX - 1)
@@ -347,7 +351,9 @@ class CameraController(
     private fun applyControls(b: CaptureRequest.Builder) {
         val c = controls
         b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
-        b.set(CaptureRequest.CONTROL_ZOOM_RATIO, c.zoom)
+        // A ratio of exactly 1.0 still puts the driver on its zoom path (softer output, shifted AF regions),
+        // so only send it when the user actually zoomed.
+        if (c.zoom > 1.001f) b.set(CaptureRequest.CONTROL_ZOOM_RATIO, c.zoom)
         // Exposure
         if (c.manualExposure) {
             val exp = c.shutterNs ?: lastAutoShutterNs
