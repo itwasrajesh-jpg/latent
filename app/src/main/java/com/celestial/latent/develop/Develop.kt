@@ -39,8 +39,9 @@ object Develop {
         SpektraEngine.fromAssets(context.assets).use { it.listProfiles() }
 
     /**
-     * @param maxEdge longest edge to decode; use a small value for a quick look, 0 for full size.
-     * Returns the saved image's uri.
+     * Develop a RAW file.
+     * @param maxEdge longest edge to decode; a small value for a quick look, 0 for full size.
+     * Returns the saved image's uri. A new file is written every time; nothing is replaced.
      */
     fun developDng(context: Context, dng: Uri, film: String, paper: String = DEFAULT_PAPER, maxEdge: Int = 0, log: (String) -> Unit = {}): Uri {
         val t0 = System.nanoTime()
@@ -112,15 +113,70 @@ object Develop {
         }.getOrElse { android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888) }
     }
 
+    /**
+     * Develop an already-processed image (a JPEG from the Xiaomi modes, or an imported photo).
+     * The engine expects linear light, so the file is decoded and linearised first. This is film
+     * applied over someone else's rendering — a look rather than a simulation.
+     */
+    fun developJpeg(context: Context, image: Uri, film: String, paper: String = DEFAULT_PAPER, maxEdge: Int = 0, log: (String) -> Unit = {}): Uri {
+        log("reading image…")
+        val src = context.contentResolver.openInputStream(image)?.use { android.graphics.BitmapFactory.decodeStream(it) }
+            ?: error("could not open $image")
+        val scale = if (maxEdge > 0) minOf(1f, maxEdge.toFloat() / maxOf(src.width, src.height)) else 1f
+        val bmp = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(src, (src.width * scale).toInt(), (src.height * scale).toInt(), true) else src
+        val w = bmp.width; val h = bmp.height
+        log("linearising ${w}x$h…")
+        val buf = ByteBuffer.allocateDirect(w * h * 3 * 4).order(ByteOrder.nativeOrder())
+        val f = buf.asFloatBuffer()
+        val row = IntArray(w)
+        fun toLinear(v: Int): Float {
+            val c = v / 255f
+            return if (c <= 0.04045f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
+        }
+        for (y in 0 until h) {
+            bmp.getPixels(row, 0, w, 0, y, w, 1)
+            for (x in 0 until w) {
+                val p = row[x]
+                f.put(toLinear((p shr 16) and 0xFF)); f.put(toLinear((p shr 8) and 0xFF)); f.put(toLinear(p and 0xFF))
+            }
+        }
+        if (bmp !== src) bmp.recycle()
+        src.recycle()
+        log("developing…")
+        val jpeg = LinearImage(buf, w, h, colorSpace = "sRGB").use { img ->
+            SpektraEngine.fromAssets(context.assets).use { engine ->
+                val params = SpektraParams(filmProfile = film, printProfile = paper, camera = CameraParams(autoExposure = true))
+                engine.simulate(img, params).use { r -> toJpeg(r.data, r.width, r.height, r.colorSpace) }
+            }
+        }
+        return save(context, jpeg, baseNameOf(context, image) + "_" + film.substringAfterLast('_') + ".jpg")
+    }
+
     private fun baseNameOf(context: Context, uri: Uri): String {
         val name = context.contentResolver.query(uri, arrayOf(MediaStore.Images.Media.DISPLAY_NAME), null, null, null)
             ?.use { if (it.moveToFirst()) it.getString(0) else null } ?: "LATENT"
         return name.substringBeforeLast('.')
     }
 
+    /** Developing again never replaces an earlier result: _2, _3 … are appended as needed. */
+    private fun uniqueName(context: Context, name: String): String {
+        val stem = name.substringBeforeLast('.'); val ext = name.substringAfterLast('.')
+        var candidate = name; var n = 1
+        while (exists(context, candidate)) { n++; candidate = "${stem}_$n.$ext" }
+        return candidate
+    }
+
+    private fun exists(context: Context, name: String): Boolean =
+        context.contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Images.Media._ID),
+            "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ? AND ${MediaStore.Images.Media.DISPLAY_NAME} = ?",
+            arrayOf("DCIM/Latent%", name), null,
+        )?.use { it.count > 0 } ?: false
+
     private fun save(context: Context, bytes: ByteArray, name: String): Uri {
+        val unique = uniqueName(context, name)
         val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, name)
+            put(MediaStore.Images.Media.DISPLAY_NAME, unique)
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
             put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Latent")
             put(MediaStore.Images.Media.IS_PENDING, 1)
@@ -130,7 +186,7 @@ object Develop {
         resolver.openOutputStream(uri)!!.use { it.write(bytes) }
         values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
-        Log.i("Latent", "developed file saved: $name")
+        Log.i("Latent", "developed file saved: $unique")
         return uri
     }
 }

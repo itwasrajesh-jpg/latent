@@ -72,6 +72,8 @@ import com.celestial.latent.camera.Controls
 import com.celestial.latent.camera.Lens
 import com.celestial.latent.camera.Lenses
 import com.celestial.latent.camera.LiveReadout
+import com.celestial.latent.develop.Develop
+import com.celestial.latent.develop.DevelopQueue
 import com.celestial.latent.ui.LatentColors
 import kotlinx.coroutines.delay
 
@@ -81,6 +83,7 @@ private enum class Cell { EV, S, ISO, WB, F }
 fun CameraScreen(
     settings: AppSettings,
     onSettingsChange: (AppSettings) -> Unit,
+    onOpenRoll: () -> Unit = {},
     onOpenSettings: () -> Unit,
     onOpenExtension: () -> Unit = {},
     onLensChanged: (Lens) -> Unit,
@@ -102,6 +105,7 @@ fun CameraScreen(
     var lastUri by remember { mutableStateOf<Uri?>(null) }
     var thumb by remember { mutableStateOf<Bitmap?>(null) }
     var countdown by remember { mutableStateOf(0) }
+    var developing by remember { mutableStateOf(DevelopQueue.queued) }
 
     fun loadThumb(uri: Uri) {
         Thread {
@@ -116,7 +120,17 @@ fun CameraScreen(
             onStatus = { s -> status = s },
             onLog = { s -> log = (s + "\n" + log).take(2000) },
             onReadout = { r -> readout = r; if (r.kelvinEstimate > 0) kelvinShown = r.kelvinEstimate },
-            onSaved = { uri -> loadThumb(uri) },
+            onSaved = { uri ->
+                loadThumb(uri)
+                // Single RAW captures are developed in the background; bursts and JPEGs are not.
+                val name = runCatching {
+                    context.contentResolver.query(uri, arrayOf(android.provider.MediaStore.Images.Media.DISPLAY_NAME), null, null, null)
+                        ?.use { if (it.moveToFirst()) it.getString(0) else null }
+                }.getOrNull().orEmpty()
+                if (settings.autoDevelop && name.endsWith(".dng", true) && !name.contains("BURST") && !name.contains("STACK")) {
+                    DevelopQueue.submit(context, DevelopQueue.Job(uri, settings.film, isRaw = true))
+                }
+            },
         )
     }
     var surfaceRef by remember { mutableStateOf<Surface?>(null) }
@@ -171,6 +185,11 @@ fun CameraScreen(
         controller.inSensorZoomJpeg = settings.inSensorZoomJpeg
         controller.teleZoomDirect = settings.teleZoomDirect
         controller.syncSession()
+    }
+    DisposableEffect(Unit) {
+        DevelopQueue.onChanged = { developing = DevelopQueue.queued }
+        DevelopQueue.onDeveloped = { uri -> loadThumb(uri) }
+        onDispose { DevelopQueue.onChanged = {}; DevelopQueue.onDeveloped = {} }
     }
     LaunchedEffect(Unit) { controller.onVendorEcho = onVendorEcho; controller.onBurstFinished = { Haptics.click(context) }; onController(controller) }
     LaunchedEffect(settings.haptics) { Haptics.enabled = settings.haptics }
@@ -260,10 +279,10 @@ fun CameraScreen(
                 modifier = Modifier.align(Alignment.TopCenter).padding(8.dp).clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).padding(horizontal = 10.dp, vertical = 4.dp))
             if (countdown > 0) Text("$countdown", color = LatentColors.TextBright, fontSize = 64.sp, modifier = Modifier.align(Alignment.Center))
             Text((if (lens.mm >= 70) "TELE" else lens.name.uppercase()) + " · ${lens.mm} MM" + (if (readout.afState.isNotEmpty()) " · AF ${readout.afState.uppercase()}" else ""),
-                color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(12.dp))
-            Text(if (controls.zoom == 2f) "×2 ON" else "", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp))
+                color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 76.dp))
+            Text(if (controls.zoom == 2f) "×2 ON" else "", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 76.dp))
             // Lens row floating on the image: plain numbers, active one larger; ×2 multiplies the current lens.
-            Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 46.dp), verticalAlignment = Alignment.CenterVertically) {
                 Lenses.ALL.forEach { l ->
                     val on = l == lens
                     Text(if (on) l.label + "×" else l.label, color = if (on) LatentColors.TextBright else LatentColors.Text, fontSize = if (on) 15.sp else 12.sp,
@@ -278,6 +297,7 @@ fun CameraScreen(
                     modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(if (zoomOn) LatentColors.Amber else Color.Transparent).border(0.5.dp, LatentColors.Amber, RoundedCornerShape(999.dp))
                         .combinedClickable(onClick = { Haptics.tick(context); push(controls.copy(zoom = if (zoomOn) 1f else 2f)) }).padding(horizontal = 9.dp, vertical = 3.dp))
             }
+            FilmStrip(settings.film, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) { f -> onSettingsChange(settings.copy(film = f)) }
             if (toast.isNotEmpty()) Text(toast, color = LatentColors.TextBright, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xCC161615)).padding(12.dp))
             // Quick-settings drawer over the lower part of the viewfinder.
             if (drawerOpen) {
@@ -335,14 +355,10 @@ fun CameraScreen(
         // ---- Shutter row: thumbnail · shutter · burst toggle ----
         Row(Modifier.fillMaxWidth().padding(horizontal = 30.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)).background(LatentColors.Surface)
-                .combinedClickable(onClick = {
-                    Haptics.tick(context)
-                    lastUri?.let { uri ->
-                        val view = Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, context.contentResolver.getType(uri) ?: "image/*"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-                        runCatching { context.startActivity(view) }
-                    }
-                })) {
+                .combinedClickable(onClick = { Haptics.tick(context); onOpenRoll() })) {
                 thumb?.let { Image(it.asImageBitmap(), contentDescription = "Last photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+                if (developing > 0) Text("$developing", color = LatentColors.AmberInk, fontSize = 9.sp,
+                    modifier = Modifier.align(Alignment.TopEnd).clip(CircleShape).background(LatentColors.Amber).padding(horizontal = 5.dp, vertical = 1.dp))
             }
             Box(
                 Modifier.size(78.dp).clip(CircleShape).border(2.dp, LatentColors.TextBright, CircleShape)
@@ -354,7 +370,8 @@ fun CameraScreen(
                 Text("16", color = if (settings.burstMode) LatentColors.Amber else LatentColors.Text, fontSize = 13.sp, fontWeight = FontWeight.Light)
             }
         }
-        Text(if (settings.burstMode) "BURST · HOLD FOR SINGLE" else "SINGLE · HOLD FOR BURST", color = LatentColors.Line, fontSize = 9.sp, letterSpacing = 1.5.sp,
+        val filmLabel = Develop.FILMS.firstOrNull { it.first == settings.film }?.second?.uppercase() ?: "FILM"
+        Text(filmLabel + (if (developing > 0) " · DEVELOPING $developing" else if (settings.burstMode) " · BURST" else ""), color = LatentColors.Line, fontSize = 9.sp, letterSpacing = 1.5.sp,
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }

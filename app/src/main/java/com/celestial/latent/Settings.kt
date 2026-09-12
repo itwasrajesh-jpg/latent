@@ -36,6 +36,8 @@ data class AppSettings(
     val timerSeconds: Int = 0,              // 0 / 3 / 10
     val burstMode: Boolean = false,         // tap = 16-frame burst (hold = single)
     val haptics: Boolean = true,
+    val film: String = "kodak_portra_400",   // film used for the live preview and auto-develop
+    val autoDevelop: Boolean = true,         // develop single shots in the background (never bursts)
 ) {
     companion object {
         const val ANTIBANDING_OFF = 0
@@ -64,6 +66,8 @@ data class AppSettings(
                 timerSeconds = p.getInt("timerSeconds", 0),
                 burstMode = p.getBoolean("burstMode", false),
                 haptics = p.getBoolean("haptics", true),
+                film = p.getString("film", "kodak_portra_400") ?: "kodak_portra_400",
+                autoDevelop = p.getBoolean("autoDevelop", true),
             )
         }
 
@@ -85,6 +89,8 @@ data class AppSettings(
                 .putInt("timerSeconds", s.timerSeconds)
                 .putBoolean("burstMode", s.burstMode)
                 .putBoolean("haptics", s.haptics)
+                .putString("film", s.film)
+                .putBoolean("autoDevelop", s.autoDevelop)
                 .apply()
         }
     }

@@ -255,7 +255,7 @@ class ExtensionCamera(private val context: android.content.Context, private val 
 
 @RequiresApi(31)
 @Composable
-fun ExtensionScreen(onBack: () -> Unit) {
+fun ExtensionScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current
     var status by remember { mutableStateOf("Starting…") }
     var mode by remember { mutableStateOf(CameraExtensionCharacteristics.EXTENSION_BOKEH) }
@@ -274,7 +274,11 @@ fun ExtensionScreen(onBack: () -> Unit) {
     val cam = remember {
         ExtensionCamera(context) { s -> status = s }.also {
             it.onZoomSupport = { ok -> zoomOk = ok }; it.onCaps = { c -> caps = c }
-            it.onSaved = { uri -> Thread { val b = runCatching { context.contentResolver.loadThumbnail(uri, android.util.Size(192, 192), null) }.getOrNull(); if (b != null) { thumb = b; lastUri = uri } }.start() }
+            it.onSaved = { uri ->
+                Thread { val b = runCatching { context.contentResolver.loadThumbnail(uri, android.util.Size(192, 192), null) }.getOrNull(); if (b != null) { thumb = b; lastUri = uri } }.start()
+                // Xiaomi's modes hand us a finished JPEG: film goes over their rendering, not over RAW.
+                if (settings.autoDevelop) com.celestial.latent.develop.DevelopQueue.submit(context, com.celestial.latent.develop.DevelopQueue.Job(uri, settings.film, isRaw = false))
+            }
         }
     }
     DisposableEffect(Unit) { onDispose { cam.destroy() } }
@@ -331,7 +335,7 @@ fun ExtensionScreen(onBack: () -> Unit) {
             var baseZoom by remember { mutableStateOf(1f) }
             var x2 by remember { mutableStateOf(false) }
             fun send() { zoom = baseZoom * (if (x2) 2f else 1f); cam.applyZoom(zoom) }
-            if (zoomOk) Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (zoomOk) Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 46.dp), verticalAlignment = Alignment.CenterVertically) {
                 listOf(0.6f to "0.6", 1f to "1", 3f to "3", 4.3f to "4.3").forEach { (z, label) ->
                     val on = baseZoom == z
                     Text(if (on) "$label×" else label, color = if (on) LatentColors.TextBright else LatentColors.Text, fontSize = if (on) 15.sp else 12.sp,
@@ -346,7 +350,8 @@ fun ExtensionScreen(onBack: () -> Unit) {
                     modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(999.dp)).background(if (iszOn) LatentColors.Amber else androidx.compose.ui.graphics.Color.Transparent).border(0.5.dp, LatentColors.Amber, RoundedCornerShape(999.dp))
                         .combinedClickable(onClick = { Haptics.tick(context); iszOn = !iszOn; cam.isz = iszOn; cam.refresh() }).padding(horizontal = 8.dp, vertical = 3.dp))
             }
-            Text(if (zoomOk) "LENS VIA ZOOM · JPEG ONLY" else "LENS CHOSEN BY XIAOMI · JPEG ONLY", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(12.dp))
+            Text((if (zoomOk) "LENS VIA ZOOM" else "LENS BY XIAOMI") + " · FILM OVER JPEG", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 76.dp))
+            FilmStrip(settings.film, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) { f -> onSettingsChange(settings.copy(film = f)) }
             if (toast.isNotEmpty()) Text(toast, color = LatentColors.TextBright, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp).clip(RoundedCornerShape(8.dp)).background(androidx.compose.ui.graphics.Color(0xCC161615)).padding(12.dp))
             caps?.let { c ->
                 FocusEvOverlay(

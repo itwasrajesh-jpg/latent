@@ -74,7 +74,8 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
         ) { onChange(settings.copy(defaultLensId = it)) }
 
         Section("Film")
-        Text("Develop a photo ›", color = LatentColors.Amber, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onOpenDevelop).padding(vertical = 10.dp))
+        ToggleRow("Develop every photo", "Single shots are developed with the selected film in the background. Bursts are never auto-developed.", settings.autoDevelop) { onChange(settings.copy(autoDevelop = it)) }
+        Text("Darkroom ›", color = LatentColors.Amber, fontSize = 14.sp, modifier = Modifier.combinedClickable(onClick = onOpenDevelop).padding(vertical = 10.dp))
         Text("Runs the newest DNG through the spektrafilm engine. First look; the real flow comes later.", color = LatentColors.TextDim, fontSize = 12.sp)
 
         Section("Xiaomi processing (official extensions)")
