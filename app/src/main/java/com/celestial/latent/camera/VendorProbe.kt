@@ -306,22 +306,49 @@ class VendorProbe(private val context: Context) {
         return sb.toString()
     }
 
-    /** Sweep sensor mode indices via sensor_meta_data.current_mode (request scope). */
+    /** Sweep sensor mode indices via sensor_meta_data.current_mode, at a locked exposure. */
     @SuppressLint("MissingPermission")
     fun sensorModeSweep(path: String, lens: Lens, from: Int, to: Int, progress: (String) -> Unit): String {
         val key = "org.codeaurora.qcamera3.sensor_meta_data.current_mode"
         val sb = StringBuilder("LATENT SENSOR MODE SWEEP · path=$path lens=${lens.physicalId} (${lens.name}) · $key\n")
-        progress("baseline…")
-        val base = runOneRetry(path, lens, null, 1f)
+        progress("metering…")
+        val auto = runOneRetry(path, lens, null, 1f)
+        if (!auto.ok || auto.exposureNs == 0L) return sb.appendLine("could not meter: $auto").toString()
+        val lock = auto.exposureNs to auto.iso
+        sb.appendLine("locked at ${auto.exposure}, ISO ${auto.iso} — frames are comparable\n")
+        val base = runOne(path, lens, null, 1f, 1, lock)
         sb.appendLine("baseline: $base")
+        var consecutiveFails = 0
+        val crashed = ArrayList<Int>()
         for (m in from..to) {
+            if (consecutiveFails >= 5) { sb.appendLine("\nstopped at mode $m after 5 failures in a row — the camera service is unhappy; rerun from here if you want the rest"); break }
             progress("mode $m / $to")
-            val r = runOneRetry(path, lens, key, 1f, m)
-            val cls = if (r.ok) classify(r.thumb, base.thumb) else ""
-            val flag = if (r.ok && (r.whiteLevel != base.whiteLevel || r.blackLevel != base.blackLevel)) " ← LEVELS CHANGED" else ""
-            sb.appendLine("mode $m: $r · $cls$flag")
+            var r = runOne(path, lens, key, 1f, m, lock)
+            if (!r.ok && (r.note.contains("disconnect", true) || r.note.contains("characteristics", true) || r.note.contains("error", true))) {
+                crashed += m
+                if (waitForCameraService(progress)) r = runOne(path, lens, key, 1f, m, lock)
+            }
+            if (r.ok) {
+                consecutiveFails = 0
+                val cls = classify(r.thumb, base.thumb)
+                val levels = if (r.whiteLevel != base.whiteLevel) " ← LEVELS CHANGED (${base.whiteLevel}→${r.whiteLevel})" else ""
+                val noise = if (base.shadowNoise > 0) " · shadow noise %.2f vs %.2f".format(r.shadowNoise, base.shadowNoise) else ""
+                sb.appendLine("mode $m: ok ${r.rawW}x${r.rawH} echo=${r.echo} · $cls$noise$levels")
+            } else { consecutiveFails++; sb.appendLine("mode $m: ${r.note}") }
         }
+        if (crashed.isNotEmpty()) sb.appendLine("\nmodes that upset the camera service: ${crashed.joinToString()}")
         return sb.toString()
+    }
+
+    /** Blocks until the camera service answers again after a driver crash (up to ~20 s). */
+    private fun waitForCameraService(progress: (String) -> Unit): Boolean {
+        for (i in 1..20) {
+            Thread.sleep(1000)
+            progress("camera service restarting… ($i)")
+            val ok = runCatching { cm.getCameraCharacteristics(Lenses.LOGICAL_ID); true }.getOrDefault(false)
+            if (ok) { Thread.sleep(1500); return true }
+        }
+        return false
     }
 
     @SuppressLint("MissingPermission")
