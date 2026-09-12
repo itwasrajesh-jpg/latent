@@ -166,7 +166,11 @@ class CameraController(
             openSignature = sessionSignature()        // claim these settings now, so a sync during the open does not loop
             this.lens = lens
             this.previewSurface = surface
-            directOpen = cameraPath == "direct" || fallbackDirect
+            // A zoom ratio on a logical multi-camera lets the driver hand the frame to another sensor
+            // (visible switch + refocus). Opening the lens directly keeps it on the sensor we chose.
+            val zoomedTele = controls.zoom > 1.001f && lens.physicalId != "2"
+            directOpen = cameraPath == "direct" || fallbackDirect || zoomedTele
+            if (zoomedTele) log("zoom on ${lens.name}: opening the lens directly to stop the logical camera switching sensors")
             logicalId = if (cameraPath == "direct") Lenses.LOGICAL_ID else cameraPath
             try {
                 physChars = cm.getCameraCharacteristics(lens.physicalId)
@@ -297,7 +301,12 @@ class CameraController(
         } catch (e: Exception) { status("update failed: ${e.message}") }
     }
 
-    fun setControls(c: Controls) = handler.post { controls = c; updatePreview() }
+    fun setControls(c: Controls) = handler.post {
+        val wasZoomedTele = controls.zoom > 1.001f && lens.physicalId != "2"
+        controls = c
+        val isZoomedTele = c.zoom > 1.001f && lens.physicalId != "2"
+        if (wasZoomedTele != isZoomedTele) previewSurface?.let { open(lens, it) } else updatePreview()
+    }
     fun setAntibanding(mode: Int) = handler.post { antibanding = mode; updatePreview() }
 
     /** Viewfinder point (u right, v down, both 0..1) -> metering rectangle in sensor coordinates. */
