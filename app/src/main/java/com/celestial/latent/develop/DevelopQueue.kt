@@ -18,22 +18,38 @@ object DevelopQueue {
      * Full-resolution develop, run on the same single thread as auto-develop so two heavy
      * engine runs can never overlap — overlapping them makes both crawl.
      */
+    /**
+     * Full-resolution develop on the same single thread as auto-develop. The returned handle
+     * cancels it: a job that has not started is dropped, and one already running is abandoned
+     * (the engine cannot be interrupted mid-frame, so its result is simply discarded).
+     */
+    class Running internal constructor() {
+        @Volatile internal var cancelled = false
+        fun cancel() { cancelled = true }
+    }
+
     fun submitFull(context: Context, source: Uri, isRaw: Boolean, recipe: Recipe,
-                   onStatus: (String) -> Unit, onDone: (Uri?) -> Unit) {
+                   onStatus: (String) -> Unit, onDone: (Uri?) -> Unit): Running {
+        val handle = Running()
         pending.incrementAndGet(); onChanged()
         onStatus("queued")
         pool.execute {
             val app = context.applicationContext
             var out: Uri? = null
             try {
+                if (handle.cancelled) { Log.i("Latent", "full develop cancelled before it started"); return@execute }
                 onStatus("starting")
-                out = Develop.developFull(app, source, isRaw, recipe) { m -> onStatus(m) }
+                out = Develop.developFull(app, source, isRaw, recipe) { m -> if (!handle.cancelled) onStatus(m) }
+                if (handle.cancelled) { Log.i("Latent", "full develop finished after cancel; result discarded"); out = null }
             } catch (t: Throwable) {
-                Log.e("Latent", "full develop failed", t); onStatus("failed: ${t.message}")
+                Log.e("Latent", "full develop failed", t)
+                if (!handle.cancelled) onStatus("failed: ${t.message}")
             } finally {
-                pending.decrementAndGet(); onChanged(); onDone(out)
+                pending.decrementAndGet(); onChanged()
+                if (!handle.cancelled) onDone(out) else onDone(null)
             }
         }
+        return handle
     }
 
     private val pool = Executors.newSingleThreadExecutor { r -> Thread(r, "latent-develop").apply { priority = Thread.MIN_PRIORITY } }

@@ -92,6 +92,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
     var fullStarted by remember { mutableStateOf(0L) }
     var elapsed by remember { mutableStateOf(0) }
     var lastRenderMs by remember { mutableStateOf(0) }
+    var fullJob by remember { mutableStateOf<com.celestial.latent.develop.DevelopQueue.Running?>(null) }
     var tab by remember { mutableStateOf("film") }
     var sheet by remember { mutableStateOf(0) }   // 0 peek, 1 half, 2 full
     var saveName by remember { mutableStateOf("") }
@@ -193,17 +194,11 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
         }) {
             val shown = if (comparing) (original ?: preview) else preview
             shown?.let { Image(it.asImageBitmap(), contentDescription = "Developed", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
-            if (fullRunning) Column(Modifier.align(Alignment.Center).padding(20.dp)) {
-                Text("FULL SIZE · ${elapsed}s", color = LatentColors.Amber, fontSize = 12.sp, letterSpacing = 2.sp)
-                Text(status.removePrefix("full size: "), color = LatentColors.Text, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
-                Text("12.5 MP takes a while — the engine simulates every pixel.", color = LatentColors.TextDim, fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
-            }
-            if (rendering && !fullRunning) Text("DEVELOPING…", color = LatentColors.Amber, fontSize = 10.sp, letterSpacing = 2.sp, modifier = Modifier.align(Alignment.TopEnd).padding(10.dp))
-            if (previewIsPartial && !rendering) Text("QUICK PASS · CENTRE ONLY", color = Color(0x99FFFFFF), fontSize = 9.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(10.dp))
-            if (!rendering && preview == null) Text(if (status.isEmpty()) "no preview yet" else status, color = LatentColors.Text, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp))
+
+            if (!rendering && !fullRunning && preview == null) Text(if (status.isEmpty()) "no preview yet" else status, color = LatentColors.Text, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp))
             Text(if (comparing) "ORIGINAL" else (Develop.FILMS.firstOrNull { it.first == recipe.film }?.second?.uppercase() ?: recipe.film),
-                color = Color(0xCCFFFFFF), fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(10.dp))
-            if (sheet == 0) Text("HOLD TO COMPARE", color = Color(0x99FFFFFF), fontSize = 9.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp))
+                color = Color(0xE6FFFFFF), fontSize = 10.sp, letterSpacing = 1.5.sp,
+                modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
         }
 
         // The sheet: drag the handle to give the controls more room.
@@ -219,8 +214,36 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
             Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp), contentAlignment = Alignment.Center) {
                 Box(Modifier.size(34.dp, 4.dp).clip(RoundedCornerShape(2.dp)).background(if (sheet > 0) LatentColors.Amber else LatentColors.Line))
             }
+            // One line of state, off the photograph: what is happening, how long, and a way out.
+            if (fullRunning || rendering || previewIsPartial) {
+                Column(Modifier.fillMaxWidth()) {
+                    androidx.compose.material3.LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().height(1.5.dp),
+                        color = LatentColors.Amber, trackColor = LatentColors.Surface,
+                    )
+                    Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            when {
+                                fullRunning -> "FULL SIZE"
+                                rendering -> "DEVELOPING"
+                                else -> "QUICK PASS · CENTRE"
+                            },
+                            color = LatentColors.Amber, fontSize = 9.sp, letterSpacing = 2.sp,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (fullRunning) Text("${elapsed}s", color = LatentColors.Text, fontSize = 10.sp)
+                            else if (lastRenderMs > 0) Text("${lastRenderMs} ms", color = LatentColors.TextDim, fontSize = 10.sp)
+                            if (fullRunning) Text("✕", color = LatentColors.Text, fontSize = 14.sp,
+                                modifier = Modifier.combinedClickable(onClick = {
+                                    Haptics.tick(context); fullJob?.cancel(); fullJob = null; fullRunning = false; status = "cancelled"
+                                }).padding(start = 12.dp, end = 4.dp))
+                        }
+                    }
+                }
+            }
             // Film chips: always reachable, whatever tab is open.
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Develop.FILMS.forEach { (id, label) ->
                     val on = id == recipe.film
                     Text(label.uppercase(), color = if (on) LatentColors.AmberInk else LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp,
@@ -229,7 +252,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                 }
             }
             // Tabs
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 TABS.forEach { (id, label) ->
                     val on = id == tab
                     Text(label, color = if (on) LatentColors.AmberInk else LatentColors.Text, fontSize = 9.sp, letterSpacing = 1.sp,
@@ -398,17 +421,20 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
         }
 
         Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(if (isRaw) "FROM RAW" else "FILM OVER JPEG", color = LatentColors.Line, fontSize = 9.sp, letterSpacing = 1.5.sp)
+            // An honest estimate before you commit, rather than an explanation mid-wait.
+            val heavy = recipe.diffusion || recipe.printDiffusion
+            Text((if (isRaw) "FROM RAW" else "FILM OVER JPEG") + (if (heavy) " · WITH DIFFUSION, SLOW" else ""),
+                color = LatentColors.Line, fontSize = 9.sp, letterSpacing = 1.5.sp)
             Text(if (fullRunning) "Developing… ${elapsed}s" else "Develop full size", color = LatentColors.AmberInk, fontSize = 12.sp,
                 modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).combinedClickable(onClick = {
                     if (fullRunning) return@combinedClickable
                     Haptics.click(context)
                     fullRunning = true; fullStarted = System.currentTimeMillis(); status = "full size: queued"
-                    com.celestial.latent.develop.DevelopQueue.submitFull(
+                    fullJob = com.celestial.latent.develop.DevelopQueue.submitFull(
                         context, source, isRaw, recipe,
                         onStatus = { m -> status = "full size: $m" },
                         onDone = { out ->
-                            fullRunning = false
+                            fullRunning = false; fullJob = null
                             if (out != null) {
                                 status = "saved to DCIM/Latent"
                                 val b = runCatching { context.contentResolver.loadThumbnail(out, android.util.Size(1600, 1600), null) }.getOrNull()
