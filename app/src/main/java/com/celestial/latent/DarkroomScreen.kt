@@ -91,6 +91,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
     var gpuTest by remember { mutableStateOf("") }
     var fullStarted by remember { mutableStateOf(0L) }
     var elapsed by remember { mutableStateOf(0) }
+    var lastRenderMs by remember { mutableStateOf(0) }
     var tab by remember { mutableStateOf("film") }
     var sheet by remember { mutableStateOf(0) }   // 0 peek, 1 half, 2 full
     var saveName by remember { mutableStateOf("") }
@@ -119,7 +120,9 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                 }
                 // Middle of the frame first on the quick pass: it appears sooner and reads the same.
                 val target = if (cropFraction < 1f) Develop.centreCrop(src!!, cropFraction).also { cropped = it } else src!!
+                val t0 = System.nanoTime()
                 val (bytes, _) = Develop.render(context, target, r, preview = true) { m -> status = m }
+                lastRenderMs = ((System.nanoTime() - t0) / 1_000_000).toInt()
                 preview = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 previewIsPartial = cropFraction < 1f
             } catch (t: Throwable) { status = "failed: ${t.message}" }
@@ -345,7 +348,10 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                         Note("GPU speeds up the scan stage only; the spectral work stays on the CPU. Both paths self-check against the CPU engine on this device and fall back if they disagree.")
                         Text(if (gpuTest.isEmpty()) "Measure GPU vs CPU" else gpuTest, color = LatentColors.AmberInk, fontSize = 11.sp,
                             modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).combinedClickable(onClick = {
-                                if (!rendering && !fullRunning) {
+                                val busy = com.celestial.latent.develop.DevelopQueue.queued > 0
+                                if (rendering || fullRunning || busy) {
+                                    gpuTest = "wait until nothing is developing, and give the phone a minute to cool"
+                                } else {
                                     Haptics.tick(context); gpuTest = "measuring…"
                                     val r = recipe.copy(previewMaxSize = 800)
                                     Thread {
@@ -363,10 +369,11 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                                     }.start()
                                 }
                             }).padding(horizontal = 12.dp, vertical = 7.dp))
+                        Note("A hot phone downclocks hard, so measure when it is cool and idle — otherwise both numbers are just throttling.")
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                Text(status, color = LatentColors.TextDim, fontSize = 10.sp)
+                Text(status + (if (lastRenderMs > 0) " · last ${lastRenderMs} ms" else ""), color = LatentColors.TextDim, fontSize = 10.sp)
                 Row(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Reset", color = LatentColors.Text, fontSize = 11.sp,
                         modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Surface)
