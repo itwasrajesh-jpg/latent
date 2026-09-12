@@ -325,6 +325,18 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                         S("Strength", recipe.printDiffusionStrength, 0f, 1f, "%.2f", recipe.printDiffusion) { set { copy(printDiffusionStrength = it) } }
                     }
                     "camera" -> {
+                        Head("UV FILTER", recipe.filterUvAmount > 0.001f) { set { copy(filterUvAmount = if (it) 1f else 0f) } }
+                        S("Amount", recipe.filterUvAmount, 0f, 1f, "%.2f") { set { copy(filterUvAmount = it) } }
+                        S("Cut point", recipe.filterUvNm, 360f, 460f, "%.0f nm", recipe.filterUvAmount > 0.001f) { set { copy(filterUvNm = it) } }
+                        S("Softness", recipe.filterUvWidth, 2f, 40f, "%.0f nm", recipe.filterUvAmount > 0.001f) { set { copy(filterUvWidth = it) } }
+                        Head("INFRARED FILTER", recipe.filterIrAmount > 0.001f) { set { copy(filterIrAmount = if (it) 1f else 0f) } }
+                        S("Amount", recipe.filterIrAmount, 0f, 1f, "%.2f") { set { copy(filterIrAmount = it) } }
+                        S("Cut point", recipe.filterIrNm, 600f, 760f, "%.0f nm", recipe.filterIrAmount > 0.001f) { set { copy(filterIrNm = it) } }
+                        S("Softness", recipe.filterIrWidth, 2f, 60f, "%.0f nm", recipe.filterIrAmount > 0.001f) { set { copy(filterIrWidth = it) } }
+                        Note("Film sees a little beyond human sight at both ends, so without these filters reds and blues overshoot. This is the same correction the engine's author uses to tame the filming stage.")
+                        Head("METERING", null) {}
+                        Chips(listOf("center_weighted", "average", "median", "partial", "matrix", "multi_zone", "highlight_weighted"), recipe.meteringMethod) { set { copy(meteringMethod = it) } }
+                        Note("How the engine judges the scene's brightness when setting its own exposure.")
                         S("Lens blur", recipe.lensBlurUm, 0f, 40f, "%.0f µm") { set { copy(lensBlurUm = it) } }
                         Head("FILM FORMAT", null) {}
                         Chips(listOf("35" to "35 mm", "60" to "120 / 6×6", "100" to "Large format").map { it.first }, recipe.filmFormatMm.toInt().toString()) { set { copy(filmFormatMm = it.toFloat()) } }
@@ -346,6 +358,9 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                                         .combinedClickable(onClick = { Haptics.tick(context); set { copy(paper = id) } }).padding(horizontal = 10.dp, vertical = 5.dp))
                             }
                         }
+                        Toggle("Compensate for film exposure", recipe.printExposureCompensation) { set { copy(printExposureCompensation = it) } }
+                        Toggle("Normalise print exposure", recipe.normalizePrintExposure) { set { copy(normalizePrintExposure = it) } }
+                        Note("With these on — as a darkroom printer would work — the enlarger cancels out changes in film exposure, so the Exposure slider changes contrast and colour rather than brightness. Turn the first off to let film exposure change brightness directly.")
                         S("Print exposure", recipe.printExposure, 0.4f, 2.2f, "%.2f") { set { copy(printExposure = it) } }
                         S("Paper contrast", recipe.printContrast, 0.6f, 1.6f, "%.2f") { set { copy(printContrast = it) } }
                         S("Yellow filter", recipe.yFilterShift, -20f, 20f, "%+.0f") { set { copy(yFilterShift = it) } }
@@ -384,7 +399,9 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                     "engine" -> {
                         Head("RGB → SPECTRUM", null) {}
                         Chips(listOf("HANATOS2025", "MALLETT2019"), recipe.rgbToRaw) { set { copy(rgbToRaw = it) } }
-                        Note("How a colour is turned into a light spectrum before the film sees it. Hanatos 2025 is the engine's default.")
+                        Note("How a colour is turned into a light spectrum before the film sees it. Hanatos 2025 is the engine's default and still the current method.")
+                        Toggle("Adaptation window", recipe.hanatosWindow) { set { copy(hanatosWindow = it) } }
+                        Toggle("Adaptation surface", recipe.hanatosSurface) { set { copy(hanatosSurface = it) } }
                         S("Spectral blur", recipe.spectralBlur, 0f, 20f, "%.1f") { set { copy(spectralBlur = it) } }
                         S("Preview size", recipe.previewMaxSize.toFloat(), 300f, 1600f, "%.0f px") { set { copy(previewMaxSize = Math.round(it)) } }
                         Toggle("GPU preview (experimental)", recipe.gpuPreview) { set { copy(gpuPreview = it) } }

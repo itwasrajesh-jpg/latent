@@ -78,6 +78,10 @@ object LookBaker {
         r.yFilterShift, r.mFilterShift, r.yFilterNeutral, r.mFilterNeutral, r.preflash,
         r.dir, r.dirAmount, r.dirSameLayer, r.dirInterLayer,
         r.scanFilm, r.unsharpAmount, r.whiteCorrection, r.blackCorrection,
+        r.filterUvAmount, r.filterUvNm, r.filterUvWidth,
+        r.filterIrAmount, r.filterIrNm, r.filterIrWidth,
+        r.meteringMethod, r.hanatosWindow, r.hanatosSurface,
+        r.printExposureCompensation, r.normalizePrintExposure,
         r.outputColorSpace, r.outputGamutCompress, r.inputGamutCompress, r.rgbToRaw,
     ).joinToString("|")
 

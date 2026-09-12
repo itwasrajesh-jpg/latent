@@ -61,6 +61,22 @@ data class Recipe(
     /** Colour-noise cleanup before the film sees the image. -1 = choose from the shot's ISO. */
     val chromaDenoise: Float = -1f,
     val lensBlurUm: Float = 0f,
+    /**
+     * The camera's UV and infrared cut filters. Film sees a little beyond human vision at both
+     * ends, and the spectral upsampling was built for human vision — so without these, reds and
+     * blues overshoot. Each is (amount, wavelength in nm, softness in nm); amount 0 = no filter.
+     */
+    val filterUvAmount: Float = 0f,
+    val filterUvNm: Float = 410f,
+    val filterUvWidth: Float = 8f,
+    val filterIrAmount: Float = 0f,
+    val filterIrNm: Float = 675f,
+    val filterIrWidth: Float = 15f,
+    /** How the engine meters the scene when working out its own exposure. */
+    val meteringMethod: String = "center_weighted",
+    /** Hanatos 2025 adaptation, the other half of the same taming work. */
+    val hanatosWindow: Boolean = true,
+    val hanatosSurface: Boolean = false,
     val filmFormatMm: Float = 35f,
     // Diffusion filter on the lens
     val diffusion: Boolean = false,
@@ -84,6 +100,13 @@ data class Recipe(
     val mFilterShift: Float = 0f,
     val preflash: Float = 0f,
     val printContrast: Float = 1.0f,
+    /**
+     * On by default, as in the engine: the enlarger recomputes its exposure from the film
+     * exposure, exactly as a printer would — which is why film exposure changes contrast and
+     * colour rather than print brightness. Turn off to let film exposure change brightness.
+     */
+    val printExposureCompensation: Boolean = true,
+    val normalizePrintExposure: Boolean = true,
     val enlargerLensBlur: Float = 0f,
     val yFilterNeutral: Float = 55f,
     val mFilterNeutral: Float = 65f,
@@ -119,8 +142,11 @@ data class Recipe(
         camera = CameraParams(
             exposureCompensationEv = exposureEv,
             autoExposure = true,
+            autoExposureMethod = meteringMethod,
             lensBlurUm = lensBlurUm,
             filmFormatMm = filmFormatMm,
+            filterUv = Triple(filterUvAmount, filterUvNm, filterUvWidth),
+            filterIr = Triple(filterIrAmount, filterIrNm, filterIrWidth),
             diffusionFilter = DiffusionFilterParams(
                 active = diffusion, filterFamily = diffusionFamily, strength = diffusionStrength, spatialScale = diffusionScale,
                 coreIntensity = diffusionCore, coreSize = diffusionCoreSize,
@@ -146,6 +172,8 @@ data class Recipe(
             printExposure = printExposure, yFilterShift = yFilterShift, mFilterShift = mFilterShift,
             yFilterNeutral = yFilterNeutral, mFilterNeutral = mFilterNeutral,
             preflashExposure = preflash, lensBlur = enlargerLensBlur,
+            printExposureCompensation = printExposureCompensation,
+            normalizePrintExposure = normalizePrintExposure,
             diffusionFilter = DiffusionFilterParams(active = printDiffusion, filterFamily = printDiffusionFamily, strength = printDiffusionStrength),
         ),
         printRender = PrintRenderingParams(densityCurveGamma = printContrast, glare = GlareParams(active = glare, percent = glarePercent)),
@@ -162,6 +190,8 @@ data class Recipe(
         ),
         settings = SettingsParams(
             rgbToRawMethod = runCatching { Rgb2Raw.valueOf(rgbToRaw) }.getOrDefault(Rgb2Raw.HANATOS2025),
+            applyHanatos2025AdaptationWindow = hanatosWindow,
+            applyHanatos2025AdaptationSurface = hanatosSurface,
             spectralGaussianBlur = spectralBlur,
             gpuPreview = gpuPreview, gpuExport = false,
             previewMaxSize = previewMaxSize,
@@ -180,6 +210,11 @@ data class Recipe(
         put("dir", dir); put("dirAmount", dirAmount.toDouble()); put("dirSameLayer", dirSameLayer.toDouble())
         put("dirInterLayer", dirInterLayer.toDouble()); put("dirDiffusionUm", dirDiffusionUm.toDouble())
         put("chromaDenoise", chromaDenoise.toDouble())
+        put("filterUvAmount", filterUvAmount.toDouble()); put("filterUvNm", filterUvNm.toDouble()); put("filterUvWidth", filterUvWidth.toDouble())
+        put("filterIrAmount", filterIrAmount.toDouble()); put("filterIrNm", filterIrNm.toDouble()); put("filterIrWidth", filterIrWidth.toDouble())
+        put("meteringMethod", meteringMethod)
+        put("hanatosWindow", hanatosWindow); put("hanatosSurface", hanatosSurface)
+        put("printExposureCompensation", printExposureCompensation); put("normalizePrintExposure", normalizePrintExposure)
         put("lensBlurUm", lensBlurUm.toDouble()); put("filmFormatMm", filmFormatMm.toDouble())
         put("diffusion", diffusion); put("diffusionFamily", diffusionFamily); put("diffusionStrength", diffusionStrength.toDouble())
         put("diffusionScale", diffusionScale.toDouble()); put("diffusionCore", diffusionCore.toDouble()); put("diffusionCoreSize", diffusionCoreSize.toDouble())
@@ -216,6 +251,15 @@ data class Recipe(
                 dir = o.optBoolean("dir", d.dir), dirAmount = f("dirAmount", d.dirAmount), dirSameLayer = f("dirSameLayer", d.dirSameLayer),
                 dirInterLayer = f("dirInterLayer", d.dirInterLayer), dirDiffusionUm = f("dirDiffusionUm", d.dirDiffusionUm),
                 chromaDenoise = f("chromaDenoise", d.chromaDenoise),
+                filterUvAmount = f("filterUvAmount", d.filterUvAmount), filterUvNm = f("filterUvNm", d.filterUvNm),
+                filterUvWidth = f("filterUvWidth", d.filterUvWidth),
+                filterIrAmount = f("filterIrAmount", d.filterIrAmount), filterIrNm = f("filterIrNm", d.filterIrNm),
+                filterIrWidth = f("filterIrWidth", d.filterIrWidth),
+                meteringMethod = o.optString("meteringMethod", d.meteringMethod),
+                hanatosWindow = o.optBoolean("hanatosWindow", d.hanatosWindow),
+                hanatosSurface = o.optBoolean("hanatosSurface", d.hanatosSurface),
+                printExposureCompensation = o.optBoolean("printExposureCompensation", d.printExposureCompensation),
+                normalizePrintExposure = o.optBoolean("normalizePrintExposure", d.normalizePrintExposure),
                 lensBlurUm = f("lensBlurUm", d.lensBlurUm), filmFormatMm = f("filmFormatMm", d.filmFormatMm),
                 diffusion = o.optBoolean("diffusion", d.diffusion), diffusionFamily = o.optString("diffusionFamily", d.diffusionFamily),
                 diffusionStrength = f("diffusionStrength", d.diffusionStrength), diffusionScale = f("diffusionScale", d.diffusionScale),
