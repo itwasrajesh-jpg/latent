@@ -31,7 +31,9 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
     init {
         setEGLContextClientVersion(2)
         setRenderer(renderer)
-        renderMode = RENDERMODE_WHEN_DIRTY
+        // Draw continuously: cheap at preview size, and a dropped frame notification can never
+        // leave the viewfinder frozen.
+        renderMode = RENDERMODE_CONTINUOUSLY
     }
 
     /** Size the camera buffer; must match what the capture session was configured with. */
@@ -48,6 +50,11 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
     fun setExposureGain(gain: Float) { renderer.exposureGain = gain; requestRender() }
 
     fun release() = renderer.release()
+
+    private fun check(step: String) {
+        val e = GLES20.glGetError()
+        if (e != GLES20.GL_NO_ERROR) Log.e("Latent", "film preview: GL error 0x${Integer.toHexString(e)} after $step")
+    }
 
     private inner class FilmRenderer : Renderer, SurfaceTexture.OnFrameAvailableListener {
         private var program = 0
@@ -66,6 +73,7 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
         private var lutTexture = 0
         private var lutSize = 0
         private var reportedError = false
+        private val frames = java.util.concurrent.atomic.AtomicInteger(0)
 
         fun setBufferSize(w: Int, h: Int) {
             bufW = w; bufH = h
@@ -79,6 +87,7 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             lutTexture = 0
             lutSize = 0
             reportedError = false
+            frames.set(0)
             program = buildProgram(VERTEX_SHADER, FRAGMENT_SHADER)
             if (program == 0) { post { onUnavailable?.invoke("the film preview shader could not be built") }; return }
             val ids = IntArray(1)
@@ -89,6 +98,7 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            check("external texture setup")
 
             val st = SurfaceTexture(texture)
             st.setDefaultBufferSize(bufW, bufH)
@@ -96,6 +106,7 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             cameraSurfaceTexture = st
             val surf = Surface(st)
             surface = surf
+            check("surface texture creation")
             Log.i("Latent", "film preview: GL surface ready (${bufW}x$bufH)")
             post { onSurfaceReady?.invoke(surf, st) }
         }
@@ -105,7 +116,11 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             GLES20.glViewport(0, 0, width, height)
         }
 
-        override fun onFrameAvailable(st: SurfaceTexture?) = requestRender()
+        override fun onFrameAvailable(st: SurfaceTexture?) {
+            val n = frames.incrementAndGet()
+            if (n == 1 || n == 30) Log.i("Latent", "film preview: camera frame $n arrived")
+            requestRender()
+        }
 
         override fun onDrawFrame(gl: GL10?) {
             val st = cameraSurfaceTexture ?: return
@@ -139,11 +154,11 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             }
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-            if (!reportedError) {
+            if (!reportedError && frames.get() > 0) {
                 val e = GLES20.glGetError()
                 reportedError = true
-                if (e != GLES20.GL_NO_ERROR) Log.e("Latent", "film preview: GL error 0x${Integer.toHexString(e)} on the first frame")
-                else Log.i("Latent", "film preview: first frame drawn cleanly (${viewW}x$viewH)")
+                if (e != GLES20.GL_NO_ERROR) Log.e("Latent", "film preview: GL error 0x${Integer.toHexString(e)} drawing a camera frame")
+                else Log.i("Latent", "film preview: camera frame drawn cleanly (view ${viewW}x$viewH, buffer ${bufW}x$bufH)")
             }
             GLES20.glDisableVertexAttribArray(pos)
             GLES20.glDisableVertexAttribArray(uv)
