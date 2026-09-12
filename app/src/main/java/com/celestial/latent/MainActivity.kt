@@ -65,6 +65,8 @@ private fun Root() {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
     val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> granted = ok }
+    var darkroomSource by remember { mutableStateOf<android.net.Uri?>(null) }
+    var darkroomIsRaw by remember { mutableStateOf(true) }
     var crash by remember { mutableStateOf(CrashLog.read(context)) }
     var screen by remember { mutableStateOf("camera") }
     crash?.let { text ->
@@ -103,7 +105,7 @@ private fun Root() {
     }
     // System back gesture: always one step up, never out of the app while inside a sub-screen.
     BackHandler(enabled = screen != "camera") {
-        screen = if (screen == "settings" || screen == "extension" || screen == "roll") "camera" else "settings"
+        screen = when (screen) { "settings", "extension", "roll" -> "camera"; "darkroom" -> "roll"; else -> "settings" }
     }
 
     when (screen) {
@@ -119,7 +121,19 @@ private fun Root() {
             onOpenDevelop = { screen = "develop" },
             onBack = { screen = "camera" },
         )
-        "roll" -> RollScreen(settings = settings, onSettingsChange = { s -> settings = s; AppSettings.save(context, s) }, onBack = { screen = "camera" })
+        "roll" -> RollScreen(
+            settings = settings, onSettingsChange = { s -> settings = s; AppSettings.save(context, s) },
+            onOpenDarkroom = { uri, isRaw -> darkroomSource = uri; darkroomIsRaw = isRaw; screen = "darkroom" },
+            onBack = { screen = "camera" },
+        )
+        "darkroom" -> darkroomSource?.let { src ->
+            DarkroomScreen(
+                source = src, isRaw = darkroomIsRaw,
+                initial = com.celestial.latent.develop.Recipes.current(context).copy(film = settings.film),
+                onRecipeChanged = { r -> if (r.film != settings.film) { settings = settings.copy(film = r.film); AppSettings.save(context, settings) } },
+                onBack = { screen = "roll" },
+            )
+        } ?: run { screen = "roll" }
         "develop" -> DevelopScreen(onBack = { screen = "settings" })
         "extension" -> if (android.os.Build.VERSION.SDK_INT >= 31) ExtensionScreen(
             settings = settings,
@@ -139,6 +153,7 @@ private fun Root() {
             settings = settings,
             onSettingsChange = { s -> settings = s; AppSettings.save(context, s) },
             onOpenRoll = { screen = "roll" },
+            onOpenDarkroom = { uri, isRaw -> darkroomSource = uri; darkroomIsRaw = isRaw; screen = "darkroom" },
             onOpenSettings = { screen = "settings" },
             onOpenExtension = { screen = "extension" },
             onLensChanged = { l -> if (settings.rememberLens) { settings = settings.copy(defaultLensId = l.physicalId); AppSettings.save(context, settings) } },

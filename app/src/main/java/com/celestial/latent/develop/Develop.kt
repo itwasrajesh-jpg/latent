@@ -5,10 +5,8 @@ import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
-import com.spectrafilm.engine.CameraParams
 import com.spectrafilm.engine.LinearImage
 import com.spectrafilm.engine.SpektraEngine
-import com.spectrafilm.engine.SpektraParams
 import com.spectrafilm.libraw.RawDecoder
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -43,7 +41,13 @@ object Develop {
      * @param maxEdge longest edge to decode; a small value for a quick look, 0 for full size.
      * Returns the saved image's uri. A new file is written every time; nothing is replaced.
      */
-    fun developDng(context: Context, dng: Uri, film: String, paper: String = DEFAULT_PAPER, maxEdge: Int = 0, log: (String) -> Unit = {}): Uri {
+    fun developDng(context: Context, dng: Uri, recipe: Recipe, maxEdge: Int = 0, log: (String) -> Unit = {}): Uri =
+        developDngTo(context, dng, recipe, maxEdge, log).let { (bytes, _) ->
+            save(context, bytes, baseNameOf(context, dng) + "_" + recipe.film.substringAfterLast('_') + ".jpg")
+        }
+
+    /** Develops and returns the JPEG bytes plus its size, without saving — used by the darkroom preview. */
+    fun developDngTo(context: Context, dng: Uri, recipe: Recipe, maxEdge: Int = 0, log: (String) -> Unit = {}): Pair<ByteArray, Pair<Int, Int>> {
         val t0 = System.nanoTime()
         log("decoding RAW…")
         val settings = RawDecoder.Settings(maxLongEdge = maxEdge)
@@ -56,15 +60,18 @@ object Develop {
         val image = LinearImage(decoded.data, decoded.width, decoded.height, colorSpace = decoded.colorSpace,
             onClose = { RawDecoder.freeOffHeap(it) })
         val t1 = System.nanoTime()
+        var dims = 0 to 0
         val jpeg = image.use { img ->
             SpektraEngine.fromAssets(context.assets).use { engine ->
-                val params = SpektraParams(filmProfile = film, printProfile = paper, camera = CameraParams(autoExposure = true))
-                engine.simulate(img, params).use { result -> toJpeg(result.data, result.width, result.height, result.colorSpace) }
+                engine.simulate(img, recipe.toParams()).use { result ->
+                    dims = result.width to result.height
+                    toJpeg(result.data, result.width, result.height, result.colorSpace)
+                }
             }
         }
         val devMs = (System.nanoTime() - t1) / 1_000_000
-        log("developed in ${devMs} ms · saving ${jpeg.size / 1024} KB")
-        return save(context, jpeg, baseNameOf(context, dng) + "_" + film.substringAfterLast('_') + ".jpg")
+        log("developed in ${devMs} ms · ${jpeg.size / 1024} KB")
+        return jpeg to dims
     }
 
     /**
@@ -118,7 +125,12 @@ object Develop {
      * The engine expects linear light, so the file is decoded and linearised first. This is film
      * applied over someone else's rendering — a look rather than a simulation.
      */
-    fun developJpeg(context: Context, image: Uri, film: String, paper: String = DEFAULT_PAPER, maxEdge: Int = 0, log: (String) -> Unit = {}): Uri {
+    fun developJpeg(context: Context, image: Uri, recipe: Recipe, maxEdge: Int = 0, log: (String) -> Unit = {}): Uri {
+        val (bytes, _) = developJpegTo(context, image, recipe, maxEdge, log)
+        return save(context, bytes, baseNameOf(context, image) + "_" + recipe.film.substringAfterLast('_') + ".jpg")
+    }
+
+    fun developJpegTo(context: Context, image: Uri, recipe: Recipe, maxEdge: Int = 0, log: (String) -> Unit = {}): Pair<ByteArray, Pair<Int, Int>> {
         log("reading image…")
         val src = context.contentResolver.openInputStream(image)?.use { android.graphics.BitmapFactory.decodeStream(it) }
             ?: error("could not open $image")
@@ -143,13 +155,13 @@ object Develop {
         if (bmp !== src) bmp.recycle()
         src.recycle()
         log("developing…")
+        var dims = 0 to 0
         val jpeg = LinearImage(buf, w, h, colorSpace = "sRGB").use { img ->
             SpektraEngine.fromAssets(context.assets).use { engine ->
-                val params = SpektraParams(filmProfile = film, printProfile = paper, camera = CameraParams(autoExposure = true))
-                engine.simulate(img, params).use { r -> toJpeg(r.data, r.width, r.height, r.colorSpace) }
+                engine.simulate(img, recipe.toParams()).use { r -> dims = r.width to r.height; toJpeg(r.data, r.width, r.height, r.colorSpace) }
             }
         }
-        return save(context, jpeg, baseNameOf(context, image) + "_" + film.substringAfterLast('_') + ".jpg")
+        return jpeg to dims
     }
 
     private fun baseNameOf(context: Context, uri: Uri): String {
@@ -172,6 +184,9 @@ object Develop {
             "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ? AND ${MediaStore.Images.Media.DISPLAY_NAME} = ?",
             arrayOf("DCIM/Latent%", name), null,
         )?.use { it.count > 0 } ?: false
+
+    fun saveDeveloped(context: Context, bytes: ByteArray, source: Uri, film: String): Uri =
+        save(context, bytes, baseNameOf(context, source) + "_" + film.substringAfterLast('_') + ".jpg")
 
     private fun save(context: Context, bytes: ByteArray, name: String): Uri {
         val unique = uniqueName(context, name)

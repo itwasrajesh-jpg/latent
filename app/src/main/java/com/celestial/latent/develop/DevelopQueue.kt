@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 object DevelopQueue {
 
-    data class Job(val source: Uri, val film: String, val isRaw: Boolean)
+    data class Job(val source: Uri, val recipe: Recipe, val isRaw: Boolean)
 
     private val pool = Executors.newSingleThreadExecutor { r -> Thread(r, "latent-develop").apply { priority = Thread.MIN_PRIORITY } }
     private val pending = AtomicInteger(0)
@@ -27,8 +27,8 @@ object DevelopQueue {
         pending.incrementAndGet(); onChanged()
         pool.execute {
             try {
-                val out = if (job.isRaw) Develop.developDng(context.applicationContext, job.source, job.film)
-                          else Develop.developJpeg(context.applicationContext, job.source, job.film)
+                val out = if (job.isRaw) Develop.developDng(context.applicationContext, job.source, job.recipe)
+                          else Develop.developJpeg(context.applicationContext, job.source, job.recipe)
                 onDeveloped(out)
             } catch (t: Throwable) {
                 Log.e("Latent", "develop failed for ${job.source}", t)

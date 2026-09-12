@@ -24,7 +24,7 @@ import com.celestial.latent.ui.LatentColors
 
 /** The film selector that sits along the bottom of the viewfinder, on every camera screen. */
 @Composable
-fun FilmStrip(selected: String, modifier: Modifier = Modifier, onSelect: (String) -> Unit) {
+fun FilmStrip(selected: String, modifier: Modifier = Modifier, onLongPress: () -> Unit = {}, onSelect: (String) -> Unit) {
     val context = LocalContext.current
     Row(
         modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
@@ -36,7 +36,10 @@ fun FilmStrip(selected: String, modifier: Modifier = Modifier, onSelect: (String
                 label.uppercase(), color = if (on) LatentColors.AmberInk else LatentColors.TextBright, fontSize = 11.sp, letterSpacing = 1.sp,
                 modifier = Modifier.clip(RoundedCornerShape(6.dp))
                     .background(if (on) LatentColors.Amber else Color(0x73000000))
-                    .combinedClickable(onClick = { if (!on) { Haptics.tick(context); onSelect(id) } })
+                    .combinedClickable(
+                        onClick = { if (!on) { Haptics.tick(context); onSelect(id) } },
+                        onLongClick = { Haptics.click(context); onLongPress() },
+                    )
                     .padding(horizontal = 12.dp, vertical = 7.dp),
             )
         }

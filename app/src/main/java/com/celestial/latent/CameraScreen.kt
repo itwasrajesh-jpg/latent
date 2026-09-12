@@ -84,6 +84,7 @@ fun CameraScreen(
     settings: AppSettings,
     onSettingsChange: (AppSettings) -> Unit,
     onOpenRoll: () -> Unit = {},
+    onOpenDarkroom: (Uri, Boolean) -> Unit = { _, _ -> },
     onOpenSettings: () -> Unit,
     onOpenExtension: () -> Unit = {},
     onLensChanged: (Lens) -> Unit,
@@ -103,6 +104,7 @@ fun CameraScreen(
     var focusTapAt by remember { mutableStateOf(0L) }
     var drawerOpen by remember { mutableStateOf(false) }
     var lastUri by remember { mutableStateOf<Uri?>(null) }
+    var lastRawUri by remember { mutableStateOf<Uri?>(null) }
     var thumb by remember { mutableStateOf<Bitmap?>(null) }
     var countdown by remember { mutableStateOf(0) }
     var developing by remember { mutableStateOf(DevelopQueue.queued) }
@@ -127,8 +129,9 @@ fun CameraScreen(
                     context.contentResolver.query(uri, arrayOf(android.provider.MediaStore.Images.Media.DISPLAY_NAME), null, null, null)
                         ?.use { if (it.moveToFirst()) it.getString(0) else null }
                 }.getOrNull().orEmpty()
+                if (name.endsWith(".dng", true)) lastRawUri = uri
                 if (settings.autoDevelop && name.endsWith(".dng", true) && !name.contains("BURST") && !name.contains("STACK")) {
-                    DevelopQueue.submit(context, DevelopQueue.Job(uri, settings.film, isRaw = true))
+                    DevelopQueue.submit(context, DevelopQueue.Job(uri, com.celestial.latent.develop.Recipes.current(context).copy(film = settings.film), isRaw = true))
                 }
             },
         )
@@ -297,7 +300,8 @@ fun CameraScreen(
                     modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(if (zoomOn) LatentColors.Amber else Color.Transparent).border(0.5.dp, LatentColors.Amber, RoundedCornerShape(999.dp))
                         .combinedClickable(onClick = { Haptics.tick(context); push(controls.copy(zoom = if (zoomOn) 1f else 2f)) }).padding(horizontal = 9.dp, vertical = 3.dp))
             }
-            FilmStrip(settings.film, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) { f -> onSettingsChange(settings.copy(film = f)) }
+            FilmStrip(settings.film, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
+                onLongPress = { lastRawUri?.let { u -> onOpenDarkroom(u, true) } }) { f -> onSettingsChange(settings.copy(film = f)) }
             if (toast.isNotEmpty()) Text(toast, color = LatentColors.TextBright, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xCC161615)).padding(12.dp))
             // Quick-settings drawer over the lower part of the viewfinder.
             if (drawerOpen) {

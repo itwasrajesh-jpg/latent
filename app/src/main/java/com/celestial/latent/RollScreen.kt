@@ -57,7 +57,7 @@ private data class Frame(val uri: Uri, val name: String, val isRaw: Boolean, val
 
 /** The roll: every capture in DCIM/Latent, developed ones in colour, undeveloped ones waiting. */
 @Composable
-fun RollScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, onBack: () -> Unit) {
+fun RollScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, onOpenDarkroom: (Uri, Boolean) -> Unit = { _, _ -> }, onBack: () -> Unit) {
     val context = LocalContext.current
     var frames by remember { mutableStateOf<List<Frame>>(emptyList()) }
     var filter by remember { mutableStateOf("all") }
@@ -101,7 +101,7 @@ fun RollScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, o
                 ?.use { if (it.moveToFirst()) it.getString(0) else null }.orEmpty()
             val isRaw = name.endsWith(".dng", true) || name.endsWith(".raw", true) || name.endsWith(".arw", true) || name.endsWith(".cr2", true) || name.endsWith(".nef", true)
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            DevelopQueue.submit(context, DevelopQueue.Job(uri, settings.film, isRaw = isRaw))
+            DevelopQueue.submit(context, DevelopQueue.Job(uri, com.celestial.latent.develop.Recipes.current(context).copy(film = settings.film), isRaw = isRaw))
         }
     }
 
@@ -134,10 +134,10 @@ fun RollScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, o
                 }
                 Box(Modifier.aspectRatio(3f / 4f).clip(RoundedCornerShape(4.dp)).background(LatentColors.Surface)
                     .combinedClickable(onClick = {
-                        Haptics.tick(context)
-                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).apply { setDataAndType(frame.uri, context.contentResolver.getType(frame.uri) ?: "image/*"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }) }
+                        Haptics.tick(context); onOpenDarkroom(frame.uri, frame.isRaw)
                     }, onLongClick = {
-                        if (frame.isRaw) { Haptics.click(context); DevelopQueue.submit(context, DevelopQueue.Job(frame.uri, settings.film, isRaw = true)) }
+                        Haptics.click(context)
+                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).apply { setDataAndType(frame.uri, context.contentResolver.getType(frame.uri) ?: "image/*"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }) }
                     })) {
                     thumbs[frame.uri]?.let { Image(it.asImageBitmap(), contentDescription = frame.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
                     if (frame.isRaw && !frame.developed) {
@@ -150,13 +150,14 @@ fun RollScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, o
         }
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             val filmLabel = Develop.FILMS.firstOrNull { it.first == settings.film }?.second?.uppercase() ?: ""
-            Text(if (queued > 0) "$queued DEVELOPING · $filmLabel" else "$filmLabel · LONG-PRESS A RAW TO DEVELOP", color = LatentColors.Line, fontSize = 9.sp, letterSpacing = 1.5.sp)
+            Text(if (queued > 0) "$queued DEVELOPING · $filmLabel" else "$filmLabel · TAP A FRAME FOR THE DARKROOM", color = LatentColors.Line, fontSize = 9.sp, letterSpacing = 1.5.sp)
             val undeveloped = frames.filter { it.isRaw && !it.developed }
             Text("Develop all", color = if (undeveloped.isEmpty()) LatentColors.TextDim else LatentColors.AmberInk, fontSize = 12.sp,
                 modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(if (undeveloped.isEmpty()) LatentColors.Surface else LatentColors.Amber)
                     .combinedClickable(enabled = undeveloped.isNotEmpty(), onClick = {
                         Haptics.click(context)
-                        undeveloped.forEach { DevelopQueue.submit(context, DevelopQueue.Job(it.uri, settings.film, isRaw = true)) }
+                        val r = com.celestial.latent.develop.Recipes.current(context).copy(film = settings.film)
+                        undeveloped.forEach { DevelopQueue.submit(context, DevelopQueue.Job(it.uri, r, isRaw = true)) }
                     }).padding(horizontal = 14.dp, vertical = 8.dp))
         }
     }
