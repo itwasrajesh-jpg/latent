@@ -6,20 +6,43 @@ on:
 permissions:
   contents: write
 
+env:
+  # The film engine comes from the user's own fork, pinned to a commit so builds are reproducible.
+  ENGINE_REPO: itwasrajesh-jpg/Spektrafilm-android
+  ENGINE_REF: 3c8080415d7bff2e915919e199a38ca40257eb4b
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Fetch the spektrafilm engine
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/${ENGINE_REPO}.git upstream
+          cd upstream
+          git sparse-checkout init --cone
+          git sparse-checkout set engine/spektra-core lib/libraw
+          git checkout ${ENGINE_REF}
+          cd ..
+          mkdir -p engine lib
+          cp -r upstream/engine/spektra-core engine/
+          cp -r upstream/lib/libraw lib/
+          cp upstream/LICENSE ENGINE_LICENSE.txt 2>/dev/null || true
+          rm -rf upstream
+          echo "engine at ${ENGINE_REF}" && ls engine/spektra-core lib/libraw
+
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -38,4 +61,4 @@ jobs:
           gh release create "v${{ github.run_number }}" \
             "latent-v${{ github.run_number }}.apk" \
             --title "Latent 0.1.${{ github.run_number }}" \
-            --notes "Built from ${{ github.sha }} on $(date -u +%Y-%m-%d). Download the APK below and open it to install over the existing app."
+            --notes "Built from ${{ github.sha }} on $(date -u +%Y-%m-%d). Film engine: ${ENGINE_REPO}@${ENGINE_REF}. Download the APK below and open it to install over the existing app."
