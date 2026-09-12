@@ -29,6 +29,37 @@ object Develop {
     }
 
     /**
+     * Keeps the last couple of decoded images so returning to a photo is instant. Keyed by
+     * source and cap; evicted oldest-first, and every evicted buffer is freed.
+     */
+    object Cache {
+        private const val MAX = 2
+        private val entries = LinkedHashMap<String, Source>()
+
+        @Synchronized fun get(key: String): Source? = entries[key]
+
+        @Synchronized fun put(key: String, src: Source) {
+            entries[key] = src
+            while (entries.size > MAX) {
+                val oldest = entries.keys.first()
+                entries.remove(oldest)?.close()
+                Log.i("Latent", "source cache: evicted $oldest")
+            }
+        }
+
+        @Synchronized fun clear() { entries.values.forEach { it.close() }; entries.clear() }
+    }
+
+    /** A cached decode: the same photo at the same size is decoded only once. */
+    fun openCached(context: Context, source: Uri, isRaw: Boolean, maxEdge: Int, log: (String) -> Unit = {}): Source {
+        val key = "$source@$maxEdge"
+        Cache.get(key)?.let { log("using the decoded copy"); return it }
+        val src = if (isRaw) openRaw(context, source, maxEdge, log) else openImage(context, source, maxEdge)
+        Cache.put(key, src)
+        return src
+    }
+
+    /**
      * Decode a RAW once, capped to [maxEdge] (0 = full size). Some DNGs ignore the decoder's
      * own cap, so the result is box-downsampled here when it comes back too large — otherwise
      * every later render silently does full-resolution work.
@@ -105,6 +136,18 @@ object Develop {
      * which is also the only path that honours the GPU preview flag.
      */
     @Volatile var cancelRequested = false
+
+    /**
+     * The per-pixel spatial stages: the costly ones. Dropped for the quick pass while a control
+     * is moving, unless that control is one of them.
+     */
+    fun withoutSpatial(r: Recipe, keep: String?): Recipe = r.copy(
+        grain = if (keep == "grain") r.grain else false,
+        halation = if (keep == "halation") r.halation else false,
+        diffusion = if (keep == "diffusion") r.diffusion else false,
+        printDiffusion = if (keep == "diffusion") r.printDiffusion else false,
+        glare = if (keep == "glare") r.glare else false,
+    )
 
     fun render(context: Context, source: Source, recipe: Recipe, preview: Boolean, log: (String) -> Unit = {}): Pair<ByteArray, Pair<Int, Int>> {
         val t = System.nanoTime()
@@ -320,6 +363,48 @@ object Develop {
             "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ? AND ${MediaStore.Images.Media.DISPLAY_NAME} = ?",
             arrayOf("DCIM/Latent%", name), null,
         )?.use { it.count > 0 } ?: false
+
+    /** Full-resolution develop with progress, logging and a new file each time. */
+    fun developFull(context: Context, source: Uri, isRaw: Boolean, recipe: Recipe, log: (String) -> Unit = {}): Uri {
+        log("decoding at full size…")
+        val src = if (isRaw) openRaw(context, source, 0, log) else openImage(context, source, 0)
+        return src.use { s ->
+            log("developing ${s.width}×${s.height}…")
+            val (bytes, dims) = render(context, s, recipe, preview = false, log = log)
+            log("saving ${dims.first}×${dims.second}, ${bytes.size / 1024} KB")
+            saveDeveloped(context, bytes, source, recipe.film)
+        }
+    }
+
+    /** A centre crop of the source, for showing the middle of the frame first. */
+    fun centreCrop(src: Source, fraction: Float): Source {
+        val f = fraction.coerceIn(0.2f, 1f)
+        if (f >= 0.999f) return src
+        val cw = (src.width * f).toInt().coerceAtLeast(8)
+        val ch = (src.height * f).toInt().coerceAtLeast(8)
+        val x0 = (src.width - cw) / 2
+        val y0 = (src.height - ch) / 2
+        val inBuf = src.image.data.order(ByteOrder.nativeOrder()).asFloatBuffer()
+        val out = ByteBuffer.allocateDirect(cw * ch * 3 * 4).order(ByteOrder.nativeOrder())
+        val of = out.asFloatBuffer()
+        for (y in 0 until ch) {
+            var i = ((y0 + y) * src.width + x0) * 3
+            for (x in 0 until cw * 3) { of.put(inBuf.get(i)); i++ }
+        }
+        return Source(LinearImage(out, cw, ch, colorSpace = src.image.colorSpace), cw, ch)
+    }
+
+    /** The most recent developed JPEG for a capture, if there is one. */
+    fun developedFor(context: Context, source: Uri): Uri? {
+        val stem = baseNameOf(context, source)
+        return context.contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME),
+            "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ? AND ${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?",
+            arrayOf("DCIM/Latent%", "$stem!_%.jpg"),
+            "${MediaStore.Images.Media.DATE_ADDED} DESC",
+        )?.use { c -> if (c.moveToFirst()) android.content.ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, c.getLong(0)) else null }
+    }
 
     fun saveDeveloped(context: Context, bytes: ByteArray, source: Uri, film: String): Uri =
         save(context, bytes, baseNameOf(context, source) + "_" + film.substringAfterLast('_') + ".jpg")

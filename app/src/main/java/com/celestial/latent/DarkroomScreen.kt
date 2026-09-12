@@ -86,6 +86,9 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
     var pendingAt by remember { mutableStateOf(0L) }
     var src by remember { mutableStateOf<Develop.Source?>(null) }
     var coarse by remember { mutableStateOf(false) }
+    var fullRunning by remember { mutableStateOf(false) }
+    var previewIsPartial by remember { mutableStateOf(false) }
+    var gpuTest by remember { mutableStateOf("") }
     var tab by remember { mutableStateOf("film") }
     var sheet by remember { mutableStateOf(0) }   // 0 peek, 1 half, 2 full
     var saveName by remember { mutableStateOf("") }
@@ -93,30 +96,51 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
     fun render(fast: Boolean) {
         if (rendering) { pendingAt = System.currentTimeMillis(); return }
         rendering = true
-        val r = recipe.copy(previewMaxSize = if (fast) COARSE_EDGE else FINE_EDGE)
+        // While a control moves: smaller, centred, and without the costly spatial stages —
+        // except the one being edited, which has to stay visible.
+        val base = recipe.copy(previewMaxSize = if (fast) COARSE_EDGE else FINE_EDGE)
+        val r = if (fast) Develop.withoutSpatial(base, keep = tab) else base
+        val cropFraction = if (fast) 0.7f else 1f
         Thread {
             val q = com.celestial.latent.develop.DevelopQueue
             val holdsLane = if (q.engineLane.tryAcquire()) true else {
                 status = "waiting for the background develop…"
                 q.acquireLane(20)
             }
+            var cropped: Develop.Source? = null
             try {
-                // Decode once; every later edit reuses it.
                 if (src == null) {
                     status = "decoding…"
-                    src = if (isRaw) Develop.openRaw(context, source, DECODE_EDGE) { m -> status = m } else Develop.openImage(context, source, DECODE_EDGE)
+                    src = Develop.openCached(context, source, isRaw, DECODE_EDGE) { m -> status = m }
                     status = "decoded ${src!!.width}×${src!!.height}"
                 }
-                val (bytes, dims) = Develop.render(context, src!!, r, preview = true) { m -> status = m }
+                // Middle of the frame first on the quick pass: it appears sooner and reads the same.
+                val target = if (cropFraction < 1f) Develop.centreCrop(src!!, cropFraction).also { cropped = it } else src!!
+                val (bytes, _) = Develop.render(context, target, r, preview = true) { m -> status = m }
                 preview = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                previewIsPartial = cropFraction < 1f
             } catch (t: Throwable) { status = "failed: ${t.message}" }
-            finally { if (holdsLane) q.engineLane.release() }
+            finally {
+                if (cropped !== null && cropped !== src) cropped?.close()
+                if (holdsLane) q.engineLane.release()
+            }
             rendering = false
             if (pendingAt > 0) { pendingAt = 0; render(fast) }
         }.start()
     }
 
     // First render, then re-render shortly after the last control change.
+    // If this capture was already developed, show that straight away instead of a blank wait.
+    LaunchedEffect(source) {
+        if (preview == null) {
+            val existing = runCatching { Develop.developedFor(context, source) }.getOrNull()
+            if (existing != null) {
+                val b = runCatching { context.contentResolver.loadThumbnail(existing, android.util.Size(1200, 1200), null) }.getOrNull()
+                if (b != null && preview == null) { preview = b; status = "already developed · change anything to re-render" }
+            }
+        }
+    }
+
     // A quick coarse pass while a control is moving, then a fine one when it settles.
     LaunchedEffect(recipe) {
         coarse = true
@@ -126,7 +150,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
         onRecipeChanged(recipe); Recipes.setCurrent(context, recipe)
         render(fast = false)
     }
-    DisposableEffect(Unit) { onDispose { src?.close(); src = null } }
+    // The decoded copy is kept by Develop.Cache so coming back is instant; nothing to free here.
 
     fun set(block: Recipe.() -> Recipe) { recipe = recipe.block() }
 
@@ -159,6 +183,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
             val shown = if (comparing) (original ?: preview) else preview
             shown?.let { Image(it.asImageBitmap(), contentDescription = "Developed", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
             if (rendering) Text("DEVELOPING…", color = LatentColors.Amber, fontSize = 10.sp, letterSpacing = 2.sp, modifier = Modifier.align(Alignment.TopEnd).padding(10.dp))
+            if (previewIsPartial && !rendering) Text("QUICK PASS · CENTRE ONLY", color = Color(0x99FFFFFF), fontSize = 9.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(10.dp))
             if (!rendering && preview == null) Text(if (status.isEmpty()) "no preview yet" else status, color = LatentColors.Text, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp))
             Text(if (comparing) "ORIGINAL" else (Develop.FILMS.firstOrNull { it.first == recipe.film }?.second?.uppercase() ?: recipe.film),
                 color = Color(0xCCFFFFFF), fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.TopStart).padding(10.dp))
@@ -305,6 +330,26 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                         Toggle("GPU preview (experimental)", recipe.gpuPreview) { set { copy(gpuPreview = it) } }
                         Toggle("GPU export (experimental)", recipe.gpuExport) { set { copy(gpuExport = it) } }
                         Note("GPU speeds up the scan stage only; the spectral work stays on the CPU. Both paths self-check against the CPU engine on this device and fall back if they disagree.")
+                        Text(if (gpuTest.isEmpty()) "Measure GPU vs CPU" else gpuTest, color = LatentColors.AmberInk, fontSize = 11.sp,
+                            modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).combinedClickable(onClick = {
+                                if (!rendering && !fullRunning) {
+                                    Haptics.tick(context); gpuTest = "measuring…"
+                                    val r = recipe.copy(previewMaxSize = 800)
+                                    Thread {
+                                        val q = com.celestial.latent.develop.DevelopQueue
+                                        val holds = q.acquireLane(30)
+                                        try {
+                                            val s0 = src ?: Develop.openCached(context, source, isRaw, DECODE_EDGE)
+                                            var cpu = 0L; var gpu = 0L
+                                            run { val t = System.nanoTime(); Develop.render(context, s0, r.copy(gpuPreview = false, gpuExport = false), preview = true); cpu = (System.nanoTime() - t) / 1_000_000 }
+                                            run { val t = System.nanoTime(); Develop.render(context, s0, r.copy(gpuPreview = true, gpuExport = true), preview = true); gpu = (System.nanoTime() - t) / 1_000_000 }
+                                            gpuTest = "CPU ${cpu} ms · GPU ${gpu} ms" + if (gpu < cpu * 0.9) " — GPU is faster" else if (gpu > cpu * 1.1) " — GPU is slower" else " — no difference"
+                                            android.util.Log.i("Latent", "gpu comparison: cpu=${cpu}ms gpu=${gpu}ms")
+                                        } catch (t: Throwable) { gpuTest = "failed: ${t.message}" }
+                                        finally { if (holds) q.engineLane.release() }
+                                    }.start()
+                                }
+                            }).padding(horizontal = 12.dp, vertical = 7.dp))
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -327,21 +372,23 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
 
         Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(if (isRaw) "FROM RAW" else "FILM OVER JPEG", color = LatentColors.Line, fontSize = 9.sp, letterSpacing = 1.5.sp)
-            Text("Develop full size", color = LatentColors.AmberInk, fontSize = 12.sp,
+            Text(if (fullRunning) "Developing…" else "Develop full size", color = LatentColors.AmberInk, fontSize = 12.sp,
                 modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).combinedClickable(onClick = {
+                    if (fullRunning) return@combinedClickable
                     Haptics.click(context)
-                    status = "developing at full size…"
+                    fullRunning = true
+                    status = "full size: starting…"
                     val r = recipe
                     Thread {
+                        val q = com.celestial.latent.develop.DevelopQueue
+                        val holds = q.acquireLane(60)
                         try {
-                            val q = com.celestial.latent.develop.DevelopQueue
-                            val holds = q.acquireLane(60)
-                            val out = try {
-                                if (isRaw) Develop.developDng(context, source, r) else Develop.developJpeg(context, source, r)
-                            } finally { if (holds) q.engineLane.release() }
-                            status = "saved"
-                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).apply { setDataAndType(out, "image/jpeg"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }) }
-                        } catch (t: Throwable) { status = "failed: ${t.message}" }
+                            val out = Develop.developFull(context, source, isRaw, r) { m -> status = "full size: $m" }
+                            status = "saved to DCIM/Latent"
+                            val b = runCatching { context.contentResolver.loadThumbnail(out, android.util.Size(1600, 1600), null) }.getOrNull()
+                            if (b != null) preview = b
+                        } catch (t: Throwable) { status = "full size failed: ${t.message}" }
+                        finally { if (holds) q.engineLane.release(); fullRunning = false }
                     }.start()
                 }).padding(horizontal = 16.dp, vertical = 9.dp))
         }
