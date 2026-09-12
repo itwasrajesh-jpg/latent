@@ -145,7 +145,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
         Column(
             Modifier.fillMaxWidth().weight(1f - photoWeight + 0.0001f).clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)).background(Color(0xFF1D1D1B))
                 .pointerInput(Unit) {
-                    androidx.compose.foundation.gestures.detectVerticalDragGestures { _, dy ->
+                    detectVerticalDragGestures { _, dy ->
                         if (dy < -12f && sheet < 2) { Haptics.tick(context); sheet++ }
                         if (dy > 12f && sheet > 0) { Haptics.tick(context); sheet-- }
                     }
