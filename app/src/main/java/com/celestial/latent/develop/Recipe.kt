@@ -102,10 +102,18 @@ data class Recipe(
     val filmFormatMm: Float = 35f,
     // Diffusion filter on the lens.
     /**
-     * true  = Latent's own fast version (seconds, ~13–21% different from the engine's)
-     * false = the engine's exact filter (minutes at full size)
+     * How the diffusion filter is computed for the EXPORT.
+     *
+     * true (the default) = the same kernel, convolved with an FFT — seconds instead of minutes,
+     *   with the widest part of the glow worked out on a quarter-size copy (0.5% from exact).
+     * false = the engine's own direct convolution: identical by definition, and so slow at full
+     *   resolution that a single photo can take longer than you will wait.
+     *
+     * Previews always use the fast path whatever this says — the engine's own guidance is
+     * "approximate while editing, exact on export", and a 640 px preview took 88 seconds the
+     * other way.
      */
-    val fastDiffusion: Boolean = false,
+    val fastDiffusion: Boolean = true,
     val diffusion: Boolean = false,
     val diffusionFamily: String = "black_pro_mist",
     val diffusionStrength: Float = 0.5f,
@@ -243,7 +251,7 @@ data class Recipe(
     fun summary(): String = "film=$film paper=$paper scanFilm=$scanFilm ev=$exposureEv autoExp=$autoExposure " +
         "contrast=$filmContrast printExp=$printExposure printComp=$printExposureCompensation " +
         "grain=$grain(${grainSizeUm2}, scale=$grainParticleScale) halation=$halation($halationAmount) " +
-        "dir=$dir($dirAmount) glare=$glare diffusion=$diffusion out=$outputColorSpace/$outputGamutCompress"
+        "dir=$dir($dirAmount) glare=$glare diffusion=$diffusion${if (diffusion) (if (fastDiffusion) "(fft)" else "(engine-direct)") else ""} out=$outputColorSpace/$outputGamutCompress"
 
     fun toJson(): String = JSONObject().apply {
         put("film", film); put("paper", paper)

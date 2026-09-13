@@ -120,6 +120,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                 // The cache key covers the stages that alter the decoded pixels, so a change to
                 // colour noise or the fast diffusion re-decodes instead of being ignored.
                 val iso = Develop.isoOf(context, source)
+                // The working buffer belongs to the cache and is reused; never closed here.
                 src = Develop.openCached(context, source, isRaw, DECODE_EDGE, r, iso) { m -> status = m }
                 // Middle of the frame first on the quick pass: it appears sooner and reads the same.
                 val target = if (cropFraction < 1f) Develop.centreCrop(src!!, cropFraction).also { cropped = it } else src!!
@@ -380,9 +381,9 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                     }
                     "diffusion" -> {
                         Head("LENS FILTER", recipe.diffusion) { set { copy(diffusion = it) } }
-                        Toggle("Fast diffusion", recipe.fastDiffusion) { set { copy(fastDiffusion = it) } }
+                        Toggle("Fast diffusion on export", recipe.fastDiffusion) { set { copy(fastDiffusion = it) } }
                         Note(if (recipe.fastDiffusion)
-                            "The same filter, computed with an FFT instead of pixel by pixel: seconds rather than minutes. The kernel is the engine's own; the widest, softest part of the glow is worked out on a quarter-size copy, which measures 0.5% away from the exact result — below one step of a JPEG."
+                            "The same kernel as the engine's, computed with an FFT: seconds rather than minutes. It runs earlier in the chain than the engine's own, so at the same strength it can read a little softer — raise Strength to match if you are comparing them."
                         else
                             "The engine's own filter, computed directly. Identical by definition, and the slowest stage by far: minutes at full size.")
                         Chips(DIFFUSION_FAMILIES, recipe.diffusionFamily) { set { copy(diffusionFamily = it) } }

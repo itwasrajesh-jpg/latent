@@ -28,6 +28,23 @@ object Develop {
         /** Colour noise is cleaned once per decode, not once per render. */
         @Volatile var denoised = false
         @Volatile var diffused = false
+
+        /** Refills this image from [from], so one working buffer can be reused. */
+        fun refillFrom(from: Source) {
+            val src = from.image.data
+            val dst = image.data
+            src.rewind(); dst.rewind()
+            dst.put(src)
+            src.rewind(); dst.rewind()
+            denoised = false
+            diffused = false
+        }
+
+        /** An empty copy of the same shape, to be refilled. */
+        fun blankLike(): Source {
+            val dup = java.nio.ByteBuffer.allocateDirect(image.data.capacity()).order(java.nio.ByteOrder.nativeOrder())
+            return Source(LinearImage(dup, width, height, colorSpace = image.colorSpace), width, height)
+        }
         override fun close() = image.close()
     }
 
@@ -36,7 +53,8 @@ object Develop {
      * source and cap; evicted oldest-first, and every evicted buffer is freed.
      */
     object Cache {
-        private const val MAX = 2
+        // Two photos' worth: each keeps a pristine decode and its working copy.
+        private const val MAX = 4
         private val entries = LinkedHashMap<String, Source>()
 
         @Synchronized fun get(key: String): Source? = entries[key]
@@ -102,18 +120,23 @@ object Develop {
      * otherwise the edit would silently do nothing on an already-processed copy.
      */
     fun openCached(context: Context, source: Uri, isRaw: Boolean, maxEdge: Int, recipe: Recipe, iso: Int, log: (String) -> Unit = {}): Source {
-        val stages = "dn=${if (recipe.chromaDenoise >= 0f) recipe.chromaDenoise else ChromaDenoise.strengthForIso(iso)}" +
-            ":fd=${recipe.fastDiffusion && recipe.diffusion}" +
-            (if (recipe.fastDiffusion && recipe.diffusion)
-                ":${recipe.diffusionFamily}/${recipe.diffusionStrength}/${recipe.diffusionScale}/${recipe.diffusionCore}/${recipe.diffusionHalo}/${recipe.diffusionBloom}/${recipe.diffusionWarmth}"
-            else "")
-        val key = "$source@$maxEdge|$stages"
-        Cache.get(key)?.let { log("using the decoded copy"); return it }
-        val src = if (isRaw) openRaw(context, source, maxEdge, log) else openImage(context, source, maxEdge)
-        denoiseSource(src, recipe, iso, log)
-        fastDiffusionSource(src, recipe, log)
-        Cache.put(key, src)
-        return src
+        // The pristine decode is cached on its own, so changing a pre-engine setting costs a
+        // copy rather than a fresh decode of the file (which was over a second every time).
+        val key = "$source@$maxEdge"
+        val pristine = Cache.get(key) ?: run {
+            val decoded = if (isRaw) openRaw(context, source, maxEdge, log) else openImage(context, source, maxEdge)
+            Cache.put(key, decoded)
+            decoded
+        }
+        // One working buffer per photo and size, reused: no allocation churn while a slider
+        // moves, and nothing is freed while a render might still be reading it.
+        val workKey = "$key|work"
+        val working = Cache.get(workKey)?.takeIf { it.width == pristine.width && it.height == pristine.height }
+            ?: pristine.blankLike().also { Cache.put(workKey, it) }
+        working.refillFrom(pristine)
+        denoiseSource(working, recipe, iso, log)
+        fastDiffusionSource(working, recipe, preview = true, log = log)
+        return working
     }
 
     /**
@@ -233,8 +256,9 @@ object Develop {
      * Latent's own diffusion, applied before the film stage when chosen. The engine works in
      * film dimensions, so the blur is scaled by how much of the negative one pixel covers.
      */
-    fun fastDiffusionSource(source: Source, recipe: Recipe, log: (String) -> Unit = {}) {
-        if (!(recipe.fastDiffusion && recipe.diffusion)) return
+    fun fastDiffusionSource(source: Source, recipe: Recipe, preview: Boolean = false, log: (String) -> Unit = {}) {
+        // Previews always take the fast path; only the export honours the setting.
+        if (!((recipe.fastDiffusion || preview) && recipe.diffusion)) return
         if (source.diffused) return
         log("diffusion filter")
         val longest = maxOf(source.width, source.height)
@@ -257,6 +281,10 @@ object Develop {
         var dims = 0 to 0
         // GPU is preview-only: a full render always goes through the CPU engine.
         val base = sanitised(if (preview) recipe else recipe.copy(gpuPreview = false))
+            // Our own filter has already run on the pixels, so the engine's LENS filter stays
+            // off — but the enlarger's is a different stage, later in the chain, and is left to
+            // the engine. Switching both off was dropping half the glow.
+            .let { if (it.diffusion && (it.fastDiffusion || preview)) it.copy(diffusion = false) else it }
         // Our own spaces are built from the engine's sRGB output, so ask it for sRGB.
         val ourSpace = if (OutputSpace.isOurs(base.outputColorSpace)) base.outputColorSpace else ""
         val params = (if (ourSpace.isEmpty()) base else base.copy(outputColorSpace = OutputSpace.ENGINE_SRGB)).toParams()
@@ -470,7 +498,7 @@ object Develop {
         val src = if (isRaw) openRaw(context, source, maxEdge, log) else openImage(context, source, maxEdge)
         return src.use { s ->
             denoiseSource(s, recipe, isoOf(context, source), log)
-            fastDiffusionSource(s, recipe, log)
+            fastDiffusionSource(s, recipe, preview = false, log = log)
             log("developing ${s.width}×${s.height}…")
             val (bytes, dims) = render(context, s, recipe, preview = false, log = log)
             log("saving ${dims.first}×${dims.second}, ${bytes.size / 1024} KB")
