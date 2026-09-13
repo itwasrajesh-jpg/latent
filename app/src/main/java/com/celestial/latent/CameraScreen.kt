@@ -354,10 +354,10 @@ fun CameraScreen(
                 modifier = Modifier.align(Alignment.TopCenter).padding(8.dp).clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber).padding(horizontal = 10.dp, vertical = 4.dp))
             if (countdown > 0) Text("$countdown", color = LatentColors.TextBright, fontSize = 64.sp, modifier = Modifier.align(Alignment.Center))
             Text((if (lens.mm >= 70) "TELE" else lens.name.uppercase()) + " · ${lens.mm} MM" + (if (readout.afState.isNotEmpty()) " · AF ${readout.afState.uppercase()}" else ""),
-                color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 76.dp))
-            Text(if (controls.zoom == 2f) "×2 ON" else "", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 76.dp))
+                color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 122.dp))
+            Text(if (controls.zoom == 2f) "×2 ON" else "", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 122.dp))
             // Lens row floating on the image: plain numbers, active one larger; ×2 multiplies the current lens.
-            Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 46.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 84.dp), verticalAlignment = Alignment.CenterVertically) {
                 Lenses.ALL.forEach { l ->
                     val on = l == lens
                     Text(if (on) l.label + "×" else l.label, color = if (on) LatentColors.TextBright else LatentColors.Text, fontSize = if (on) 15.sp else 12.sp,

@@ -27,6 +27,7 @@ object Develop {
     class Source(val image: LinearImage, val width: Int, val height: Int) : AutoCloseable {
         /** Colour noise is cleaned once per decode, not once per render. */
         @Volatile var denoised = false
+        @Volatile var diffused = false
         override fun close() = image.close()
     }
 
@@ -95,11 +96,22 @@ object Develop {
         return scan(u32(4), 0)
     }
 
-    /** A cached decode: the same photo at the same size is decoded only once. */
-    fun openCached(context: Context, source: Uri, isRaw: Boolean, maxEdge: Int, log: (String) -> Unit = {}): Source {
-        val key = "$source@$maxEdge"
+    /**
+     * A cached decode. Colour-noise cleanup and Latent's own diffusion both modify the decoded
+     * pixels in place, so their settings are part of the key: changing either must re-decode,
+     * otherwise the edit would silently do nothing on an already-processed copy.
+     */
+    fun openCached(context: Context, source: Uri, isRaw: Boolean, maxEdge: Int, recipe: Recipe, iso: Int, log: (String) -> Unit = {}): Source {
+        val stages = "dn=${if (recipe.chromaDenoise >= 0f) recipe.chromaDenoise else ChromaDenoise.strengthForIso(iso)}" +
+            ":fd=${recipe.fastDiffusion && recipe.diffusion}" +
+            (if (recipe.fastDiffusion && recipe.diffusion)
+                ":${recipe.diffusionFamily}/${recipe.diffusionStrength}/${recipe.diffusionScale}/${recipe.diffusionCore}/${recipe.diffusionHalo}/${recipe.diffusionBloom}/${recipe.diffusionWarmth}"
+            else "")
+        val key = "$source@$maxEdge|$stages"
         Cache.get(key)?.let { log("using the decoded copy"); return it }
         val src = if (isRaw) openRaw(context, source, maxEdge, log) else openImage(context, source, maxEdge)
+        denoiseSource(src, recipe, iso, log)
+        fastDiffusionSource(src, recipe, log)
         Cache.put(key, src)
         return src
     }
@@ -215,6 +227,25 @@ object Develop {
             ChromaDenoise.apply(source.image.data, source.width, source.height, strength)
         }
         source.denoised = true
+    }
+
+    /**
+     * Latent's own diffusion, applied before the film stage when chosen. The engine works in
+     * film dimensions, so the blur is scaled by how much of the negative one pixel covers.
+     */
+    fun fastDiffusionSource(source: Source, recipe: Recipe, log: (String) -> Unit = {}) {
+        if (!(recipe.fastDiffusion && recipe.diffusion)) return
+        if (source.diffused) return
+        log("diffusion (Latent's fast version)")
+        val longest = maxOf(source.width, source.height)
+        val pixelSizeUm = recipe.filmFormatMm * 1000f / longest
+        FastDiffusion.apply(
+            source.image.data, source.width, source.height,
+            recipe.diffusionFamily, recipe.diffusionStrength, recipe.diffusionScale,
+            recipe.diffusionCore, recipe.diffusionHalo, recipe.diffusionBloom, recipe.diffusionWarmth,
+            pixelSizeUm,
+        )
+        source.diffused = true
     }
 
     fun render(context: Context, source: Source, recipe: Recipe, preview: Boolean, log: (String) -> Unit = {}): Pair<ByteArray, Pair<Int, Int>> {
@@ -426,6 +457,7 @@ object Develop {
         val src = if (isRaw) openRaw(context, source, maxEdge, log) else openImage(context, source, maxEdge)
         return src.use { s ->
             denoiseSource(s, recipe, isoOf(context, source), log)
+            fastDiffusionSource(s, recipe, log)
             log("developing ${s.width}×${s.height}…")
             val (bytes, dims) = render(context, s, recipe, preview = false, log = log)
             log("saving ${dims.first}×${dims.second}, ${bytes.size / 1024} KB")

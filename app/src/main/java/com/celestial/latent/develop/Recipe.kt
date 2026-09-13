@@ -100,7 +100,12 @@ data class Recipe(
     val hanatosWindow: Boolean = true,
     val hanatosSurface: Boolean = false,
     val filmFormatMm: Float = 35f,
-    // Diffusion filter on the lens
+    // Diffusion filter on the lens.
+    /**
+     * true  = Latent's own fast version (seconds, ~13–21% different from the engine's)
+     * false = the engine's exact filter (minutes at full size)
+     */
+    val fastDiffusion: Boolean = false,
     val diffusion: Boolean = false,
     val diffusionFamily: String = "black_pro_mist",
     val diffusionStrength: Float = 0.5f,
@@ -173,7 +178,9 @@ data class Recipe(
             filterUv = Triple(filterUvAmount, filterUvNm, filterUvWidth),
             filterIr = Triple(filterIrAmount, filterIrNm, filterIrWidth),
             diffusionFilter = DiffusionFilterParams(
-                active = diffusion, filterFamily = diffusionFamily, strength = diffusionStrength, spatialScale = diffusionScale,
+                // Ours runs before the engine, so the engine's own stays off in that case.
+                active = diffusion && !fastDiffusion,
+                filterFamily = diffusionFamily, strength = diffusionStrength, spatialScale = diffusionScale,
                 coreIntensity = diffusionCore, coreSize = diffusionCoreSize,
                 haloIntensity = diffusionHalo, haloSize = diffusionHaloSize,
                 bloomIntensity = diffusionBloom, bloomSize = diffusionBloomSize, haloWarmth = diffusionWarmth,
@@ -264,6 +271,7 @@ data class Recipe(
         put("hanatosWindow", hanatosWindow); put("hanatosSurface", hanatosSurface)
         put("printExposureCompensation", printExposureCompensation); put("normalizePrintExposure", normalizePrintExposure)
         put("lensBlurUm", lensBlurUm.toDouble()); put("filmFormatMm", filmFormatMm.toDouble())
+        put("fastDiffusion", fastDiffusion)
         put("diffusion", diffusion); put("diffusionFamily", diffusionFamily); put("diffusionStrength", diffusionStrength.toDouble())
         put("diffusionScale", diffusionScale.toDouble()); put("diffusionCore", diffusionCore.toDouble()); put("diffusionCoreSize", diffusionCoreSize.toDouble())
         put("diffusionHalo", diffusionHalo.toDouble()); put("diffusionHaloSize", diffusionHaloSize.toDouble())
@@ -324,6 +332,7 @@ data class Recipe(
                 printExposureCompensation = o.optBoolean("printExposureCompensation", d.printExposureCompensation),
                 normalizePrintExposure = o.optBoolean("normalizePrintExposure", d.normalizePrintExposure),
                 lensBlurUm = f("lensBlurUm", d.lensBlurUm), filmFormatMm = f("filmFormatMm", d.filmFormatMm),
+                fastDiffusion = o.optBoolean("fastDiffusion", d.fastDiffusion),
                 diffusion = o.optBoolean("diffusion", d.diffusion), diffusionFamily = o.optString("diffusionFamily", d.diffusionFamily),
                 diffusionStrength = f("diffusionStrength", d.diffusionStrength), diffusionScale = f("diffusionScale", d.diffusionScale),
                 diffusionCore = f("diffusionCore", d.diffusionCore), diffusionCoreSize = f("diffusionCoreSize", d.diffusionCoreSize),

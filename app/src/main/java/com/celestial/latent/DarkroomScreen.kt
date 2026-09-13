@@ -115,12 +115,10 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
             }
             var cropped: Develop.Source? = null
             try {
-                if (src == null) {
-                    status = "decoding…"
-                    src = Develop.openCached(context, source, isRaw, DECODE_EDGE) { m -> status = m }
-                    status = "decoded ${src!!.width}×${src!!.height}"
-                }
-                Develop.denoiseSource(src!!, r, Develop.isoOf(context, source)) { m -> status = m }
+                // The cache key covers the stages that alter the decoded pixels, so a change to
+                // colour noise or the fast diffusion re-decodes instead of being ignored.
+                val iso = Develop.isoOf(context, source)
+                src = Develop.openCached(context, source, isRaw, DECODE_EDGE, r, iso) { m -> status = m }
                 // Middle of the frame first on the quick pass: it appears sooner and reads the same.
                 val target = if (cropFraction < 1f) Develop.centreCrop(src!!, cropFraction).also { cropped = it } else src!!
                 val t0 = System.nanoTime()
@@ -319,6 +317,11 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                     }
                     "diffusion" -> {
                         Head("LENS FILTER", recipe.diffusion) { set { copy(diffusion = it) } }
+                        Toggle("Latent's fast version", recipe.fastDiffusion) { set { copy(fastDiffusion = it) } }
+                        Note(if (recipe.fastDiffusion)
+                            "Seconds instead of minutes, and about 13–21% different from the engine's filter — close in character, not a match. Turn off for the exact one."
+                        else
+                            "The engine's exact filter. Faithful, but the slowest stage by far: minutes at full size.")
                         Chips(DIFFUSION_FAMILIES, recipe.diffusionFamily) { set { copy(diffusionFamily = it) } }
                         S("Strength", recipe.diffusionStrength, 0f, 1f, "%.2f", recipe.diffusion) { set { copy(diffusionStrength = it) } }
                         S("Spatial scale", recipe.diffusionScale, 0.2f, 3f, "%.2f", recipe.diffusion) { set { copy(diffusionScale = it) } }
@@ -427,7 +430,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                                         val q = com.celestial.latent.develop.DevelopQueue
                                         val holds = q.acquireLane(30)
                                         try {
-                                            val s0 = src ?: Develop.openCached(context, source, isRaw, DECODE_EDGE)
+                                            val s0 = src ?: Develop.openCached(context, source, isRaw, DECODE_EDGE, recipe, Develop.isoOf(context, source))
                                             var cpu = 0L; var gpu = 0L
                                             run { val t = System.nanoTime(); Develop.render(context, s0, r.copy(gpuPreview = false), preview = true); cpu = (System.nanoTime() - t) / 1_000_000 }
                                             run { val t = System.nanoTime(); Develop.render(context, s0, r.copy(gpuPreview = true), preview = true); gpu = (System.nanoTime() - t) / 1_000_000 }

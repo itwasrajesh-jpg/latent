@@ -35,7 +35,16 @@ fun FilmStrip(selected: String, modifier: Modifier = Modifier, onLongPress: () -
     val context = LocalContext.current
     val looks = remember { Presets.all(context) }
     Row(
-        modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+        modifier
+            // A soft fade behind the strip so the names stay readable over a bright scene
+            // without putting a hard bar across the photograph.
+            .background(
+                androidx.compose.ui.graphics.Brush.verticalGradient(
+                    listOf(Color.Transparent, Color(0x66000000), Color(0x99000000)),
+                ),
+            )
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         looks.forEach { preset ->
@@ -50,7 +59,7 @@ fun FilmStrip(selected: String, modifier: Modifier = Modifier, onLongPress: () -
                         onClick = { if (!on) { Haptics.tick(context); onSelect(id) } },
                         onLongClick = { Haptics.click(context); onLongPress() },
                     )
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 13.dp, vertical = 7.dp),
             ) {
                 Text(label.uppercase(), color = if (on) LatentColors.AmberInk else LatentColors.TextBright, fontSize = 11.sp, letterSpacing = 1.sp)
                 Text(
