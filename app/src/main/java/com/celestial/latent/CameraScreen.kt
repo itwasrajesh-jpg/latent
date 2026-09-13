@@ -191,7 +191,9 @@ fun CameraScreen(
     LaunchedEffect(settings.antibanding) { controller.setAntibanding(settings.antibanding) }
     // The film look for the viewfinder: baked off the main thread, and the previous one stays
     // on screen while the new one is prepared, so the preview never flashes.
-    LaunchedEffect(settings.preset, settings.film, settings.filmPreview, glPreview) {
+    // Bake the look once per film choice. LookBaker caches by the colour-affecting settings,
+    // so this is cheap when nothing that matters has changed.
+    LaunchedEffect(settings.preset, settings.filmPreview, glPreview != null) {
         val view = glPreview
         if (!settings.filmPreview || view == null) return@LaunchedEffect
         baking = true
@@ -208,6 +210,31 @@ fun CameraScreen(
             }
         }
         baking = false
+    }
+
+    // Meter the actual scene every couple of seconds, so the live view follows the light
+    // instead of sitting at one fixed brightness.
+    LaunchedEffect(lookReady, settings.filmPreview) {
+        if (!settings.filmPreview) return@LaunchedEffect
+        var metering = false
+        while (lookReady) {
+            val view = glPreview
+            // One at a time: if the previous round is still going, skip rather than pile up.
+            if (view != null && !metering && DevelopQueue.queued == 0) {
+                metering = true
+                view.grabFrame(64) { frame, w, h ->
+                    Thread {
+                        try {
+                            val recipe = com.celestial.latent.develop.Recipes.current(context)
+                            val g = com.celestial.latent.develop.LookBaker.gainForFrame(context, recipe, frame, w, h)
+                            // A zero means the engine was busy and the round was skipped.
+                            if (g > 0.01f && glPreview === view) view.setExposureGain(g)
+                        } finally { metering = false }
+                    }.start()
+                }
+            }
+            delay(2000)
+        }
     }
 
     // Any of these changes the streams or the session tags: push them, then let the controller rebuild if needed.

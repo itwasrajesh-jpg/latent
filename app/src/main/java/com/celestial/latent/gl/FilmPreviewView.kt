@@ -49,6 +49,17 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
     /** Linear gain applied before the table, matching the engine's own auto-exposure. */
     fun setExposureGain(gain: Float) { renderer.exposureGain = gain; requestRender() }
 
+    /**
+     * Asks for a small copy of the next drawn frame, so the exposure gain can be metered from
+     * the scene in front of the camera instead of a stand-in. The callback runs on the GL
+     * thread; keep it short.
+     */
+    fun grabFrame(size: Int = 64, onFrame: (FloatArray, Int, Int) -> Unit) {
+        renderer.grabSize = size
+        renderer.onGrab = onFrame
+        requestRender()
+    }
+
     fun release() = renderer.release()
 
     private fun check(step: String) {
@@ -70,6 +81,9 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
         @Volatile var pendingLut: FloatArray? = null
         @Volatile var pendingLutSize = 33
         @Volatile var exposureGain = 1f
+        @Volatile var grabSize = 0
+        @Volatile var onGrab: ((FloatArray, Int, Int) -> Unit)? = null
+        private var readBuffer: java.nio.ByteBuffer? = null
         private var lutTexture = 0
         private var lutSize = 0
         // Two samplers of different kinds must never share a texture unit: with no look table
@@ -168,6 +182,35 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uLut"), 1)
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+            // A frame grab, when one was asked for. Reading the whole viewport back would be
+            // 11 MB a time and would stutter the preview, so a centred square is read instead —
+            // ample for metering — into a buffer that is allocated once and reused.
+            val want = grabSize
+            val cb = onGrab
+            if (want > 0 && cb != null && viewW > 0 && viewH > 0) {
+                grabSize = 0; onGrab = null
+                val side = minOf(viewW, viewH, READ_SIDE)
+                val x0 = (viewW - side) / 2
+                val y0 = (viewH - side) / 2
+                if (readBuffer == null) readBuffer = java.nio.ByteBuffer.allocateDirect(READ_SIDE * READ_SIDE * 4).order(java.nio.ByteOrder.nativeOrder())
+                val buf = readBuffer!!
+                buf.rewind()
+                GLES20.glReadPixels(x0, y0, side, side, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
+                val g = want.coerceAtMost(side)
+                val out = FloatArray(g * g * 3)
+                for (y in 0 until g) {
+                    val sy = y * side / g
+                    for (x in 0 until g) {
+                        val sx = x * side / g
+                        val i = (sy * side + sx) * 4
+                        val o = (y * g + x) * 3
+                        out[o] = SRGB_TO_LINEAR[buf.get(i).toInt() and 0xFF]
+                        out[o + 1] = SRGB_TO_LINEAR[buf.get(i + 1).toInt() and 0xFF]
+                        out[o + 2] = SRGB_TO_LINEAR[buf.get(i + 2).toInt() and 0xFF]
+                    }
+                }
+                cb(out, g, g)
+            }
             if (!reportedError && frames.get() > 0) {
                 val e = GLES20.glGetError()
                 reportedError = true
@@ -222,6 +265,9 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
         }
 
         fun release() {
+            grabSize = 0
+            onGrab = null
+            readBuffer = null
             surface?.release(); surface = null
             cameraSurfaceTexture?.release(); cameraSurfaceTexture = null
         }
@@ -263,6 +309,15 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
     }
 
     companion object {
+        /** Side of the centred square read back for metering. 256 KB, not 11 MB. */
+        private const val READ_SIDE = 256
+
+        /** The display curve undone, once, so metering sees scene-linear light. */
+        private val SRGB_TO_LINEAR = FloatArray(256) { i ->
+            val c = i / 255f
+            if (c <= 0.04045f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
+        }
+
         private val QUAD = floatBuffer(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
         private val UV = floatBuffer(floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f))
 

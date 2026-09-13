@@ -30,6 +30,28 @@ object LookBaker {
     fun invalidate() { cached = null }
 
     /** The look for [recipe], reusing the last one when nothing that affects colour changed. */
+    /**
+     * Meters [frame] (linear RGB, from the live preview) through the engine, so the viewfinder's
+     * brightness follows the scene rather than a stand-in. Falls back to 1.0 if it fails.
+     */
+    fun gainForFrame(context: Context, recipe: Recipe, frame: FloatArray, w: Int, h: Int): Float {
+        // Metering is optional and runs every couple of seconds, so it never waits: if a develop
+        // is using the engine, this round is skipped rather than running a second one alongside.
+        if (!DevelopQueue.engineLane.tryAcquire()) return 0f
+        return try {
+            val buf = ByteBuffer.allocateDirect(w * h * 3 * 4).order(ByteOrder.nativeOrder())
+            buf.asFloatBuffer().put(frame)
+            LinearImage(buf, w, h).use { img ->
+                SpektraEngine.fromAssets(context.assets).use { e -> e.exposureGain(img, Develop.sanitised(recipe).toParams()) }
+            }
+        } catch (t: Throwable) {
+            Log.w("Latent", "scene metering failed; keeping the previous gain", t)
+            0f
+        } finally {
+            DevelopQueue.engineLane.release()
+        }
+    }
+
     fun bake(context: Context, recipe: Recipe): Look? {
         val key = colourKey(recipe)
         cached?.let { if (it.recipeKey == key) return it }
