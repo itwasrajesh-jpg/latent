@@ -51,6 +51,7 @@ object Reconstruct {
             if (isRaw) Develop.openRaw(context, testShot, 320) else Develop.openImage(context, testShot, 320)
         }.getOrNull() ?: return null
 
+        val holdsLaneEarly = DevelopQueue.engineLane.tryAcquire()
         var best: Attempt? = null
         var current = Emulsion.Shape()
         var currentDistance = Float.MAX_VALUE
@@ -80,12 +81,19 @@ object Reconstruct {
         }
 
         val start = evaluate(current, keepImage = true)
-        if (start != null) { best = start; currentDistance = start.distance }
+        if (start == null) {
+            // If the very first attempt fails, every other one will fail the same way: stop and
+            // say so rather than repeating the same error hundreds of times.
+            onProgress(Progress(0, rounds, null, "could not build a film from ${baseStock.replace('_', ' ')}"))
+            if (holdsLaneEarly) DevelopQueue.engineLane.release()
+            source.close()
+            return null
+        }
+        best = start; currentDistance = start.distance
         onProgress(Progress(0, rounds, best, "starting from ${baseStock.replace('_', ' ')}"))
 
         var tried = 0
-        // One engine at a time across the whole app, as everywhere else.
-        val holdsLane = DevelopQueue.acquireLane(60)
+        val holdsLane = holdsLaneEarly
         while (tried < rounds && !cancelled) {
             // One number at a time, by a step that shrinks as the search settles.
             val v = current.asArray().copyOf()

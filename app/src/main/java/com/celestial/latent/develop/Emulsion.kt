@@ -77,8 +77,12 @@ object Emulsion {
      *
      * @return the stock id the engine will know it by, or null if it could not be written.
      */
+    /** Never let a value that is not a real number reach the file. */
+    private fun safe(v: Double, fallback: Double = 0.0) = if (v.isFinite()) v else fallback
+
     fun write(base: JSONObject, shape: Shape, stockId: String, displayName: String): String? {
         val file = EngineAssets.profileFile(stockId) ?: return null
+        if (shape.asArray().any { !it.isFinite() }) return null
         return try {
             val out = JSONObject(base.toString())
             val info = out.getJSONObject("info")
@@ -100,9 +104,9 @@ object Emulsion {
             for (c in 0 until 3) {
                 val ce = centres.getJSONArray(c); val am = amps.getJSONArray(c); val si = sigmas.getJSONArray(c)
                 for (k in 0 until ce.length()) {
-                    ce.put(k, ce.getDouble(k) + shape.centre[c] - shape.speed[c])
-                    am.put(k, (am.getDouble(k) * shape.height[c]).coerceAtLeast(0.001))
-                    si.put(k, (si.getDouble(k) * shape.width[c]).coerceAtLeast(0.02))
+                    ce.put(k, safe(ce.getDouble(k) + shape.centre[c] - shape.speed[c]))
+                    am.put(k, safe(am.getDouble(k) * shape.height[c], 0.001).coerceAtLeast(0.001))
+                    si.put(k, safe(si.getDouble(k) * shape.width[c], 0.02).coerceAtLeast(0.02))
                 }
             }
 
@@ -119,13 +123,25 @@ object Emulsion {
                     val ce = centres.getJSONArray(c); val am = amps.getJSONArray(c); val si = sigmas.getJSONArray(c)
                     var v = 0.0
                     for (k in 0 until ce.length()) v += am.getDouble(k) * normalCdf(x, ce.getDouble(k), si.getDouble(k))
-                    row.put(v)
-                    // The per-layer curves keep their relationship to the total.
-                    val oldTotal = oldLayers?.optJSONArray(i)?.optDouble(c) ?: v
-                    layerRow.put(oldTotal * shape.height[c])
+                    row.put(safe(v))
                 }
                 curves.put(row)
-                layers.put(layerRow)
+
+                // The per-layer curves are nested one level deeper than the totals: each row
+                // holds one entry per SUBLAYER, and each of those holds the three channels.
+                // Treating them as three plain numbers produced NaN — which JSON's "optional
+                // double" returns silently rather than refusing — and every profile written
+                // afterwards was rejected.
+                oldLayers?.optJSONArray(i)?.let { sublayers ->
+                    for (sub in 0 until sublayers.length()) {
+                        val channels = sublayers.optJSONArray(sub) ?: continue
+                        val scaled = JSONArray()
+                        for (c in 0 until channels.length()) {
+                            scaled.put(safe(channels.optDouble(c, 0.0) * shape.height[c.coerceAtMost(2)]))
+                        }
+                        layerRow.put(scaled)
+                    }
+                }
             }
             data.put("density_curves", curves)
             if (oldLayers != null) data.put("density_curves_layers", layers)
@@ -138,7 +154,7 @@ object Emulsion {
                 val row = JSONArray()
                 for (c in 0 until 3) {
                     val target = wl.getDouble(i) - shape.spectralShift[c]
-                    row.put(sampleAt(wl, sens, target, c) + shape.speed[c] * 0.301)  // stops → log10
+                    row.put(safe(sampleAt(wl, sens, target, c) + shape.speed[c] * 0.301, -9.0))  // stops → log10
                 }
                 shifted.put(row)
             }
