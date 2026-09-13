@@ -292,7 +292,6 @@ data class Fingerprint(
                 shoulderRoll = (1f - ((p99 - p90) / max(p90 - p50, 1e-3f))).coerceIn(-2f, 2f),
                 neutralWarmth = neutralWarm,
                 neutralGreen = neutralGreenLean,
-                neutralsFound = foundNeutrals,
                 shadowWarmth = cast(dr, db, dn),
                 shadowGreen = cast(dg, (dr + db) / 2f, dn),
                 highlightWarmth = cast(hr, hb, hn),

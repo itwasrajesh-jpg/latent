@@ -68,10 +68,21 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
+    /**
+     * A small copy for measuring and for the strip. Kept deliberately modest: these live in the
+     * session until it is cleared, and a dozen full-size thumbnails would be hundreds of
+     * megabytes held for the life of the app.
+     */
     fun thumbnailOf(uri: Uri): Bitmap? = runCatching {
         context.contentResolver.openInputStream(uri)?.use { input ->
-            val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
-            BitmapFactory.decodeStream(input, null, opts)
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeStream(input, null, bounds)
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 900) sample *= 2
+            input.close()
+            context.contentResolver.openInputStream(uri)?.use { fresh ->
+                BitmapFactory.decodeStream(fresh, null, BitmapFactory.Options().apply { inSampleSize = sample })
+            }
         }
     }.getOrNull()
 
