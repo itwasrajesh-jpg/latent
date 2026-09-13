@@ -42,7 +42,7 @@ object LookBaker {
             val buf = ByteBuffer.allocateDirect(w * h * 3 * 4).order(ByteOrder.nativeOrder())
             buf.asFloatBuffer().put(frame)
             LinearImage(buf, w, h).use { img ->
-                SpektraEngine.fromAssets(context.assets).use { e -> e.exposureGain(img, Develop.sanitised(recipe).toParams()) }
+                Develop.engineFor(context).use { e -> e.exposureGain(img, Develop.sanitised(recipe).toParams()) }
             }
         } catch (t: Throwable) {
             Log.w("Latent", "scene metering failed; keeping the previous gain", t)
@@ -56,7 +56,7 @@ object LookBaker {
     fun gainForSource(context: Context, recipe: Recipe, source: Develop.Source): Float {
         if (!DevelopQueue.engineLane.tryAcquire()) return 0f
         return try {
-            SpektraEngine.fromAssets(context.assets).use { e ->
+            Develop.engineFor(context).use { e ->
                 e.exposureGain(source.image, Develop.sanitised(recipe).copy(autoExposure = true).toParams())
             }
         } catch (t: Throwable) {
@@ -72,7 +72,7 @@ object LookBaker {
         return try {
             val t0 = System.nanoTime()
             val r = Develop.sanitised(recipe)
-            val look = SpektraEngine.fromAssets(context.assets).use { engine ->
+            val look = Develop.engineFor(context).use { engine ->
                 // Latent's own output spaces are applied after the engine, so the table gets the
                 // same treatment — otherwise the viewfinder would show sRGB while the file saved
                 // in Rec.709 or P3, and the two would not match.

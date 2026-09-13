@@ -315,6 +315,29 @@ object Develop {
         source.diffused = true
     }
 
+    /**
+     * The engine to develop with. Once Latent has copied the engine's assets into its own
+     * storage — which it does the first time a film is built — everything runs from that copy,
+     * so films Latent has made are available everywhere a measured one is. The copy is
+     * byte-for-byte, so nothing else changes.
+     */
+    fun engineFor(context: Context): SpektraEngine {
+        val dir = EngineAssets.directory
+        return if (dir != null) SpektraEngine(dir) else SpektraEngine.fromAssets(context.assets)
+    }
+
+    /** Render with an engine the caller supplies — used while building a film, when the profile
+     *  changes between attempts and a fresh engine is needed each time. */
+    fun renderWith(engine: SpektraEngine, context: Context, source: Source, recipe: Recipe, preview: Boolean): Pair<ByteArray, Pair<Int, Int>> {
+        var dims = 0 to 0
+        val params = sanitised(recipe).toParams()
+        val jpeg = run {
+            val result = if (preview) engine.simulatePreview(source.image, params) else engine.simulate(source.image, params)
+            result.use { r -> dims = r.width to r.height; toJpeg(r.data, r.width, r.height, r.colorSpace) }
+        }
+        return jpeg to dims
+    }
+
     fun render(context: Context, source: Source, recipe: Recipe, preview: Boolean, log: (String) -> Unit = {}): Pair<ByteArray, Pair<Int, Int>> {
         val t = System.nanoTime()
         Log.i("Latent", "render start: source ${source.width}x${source.height}, preview=$preview, cap=${recipe.previewMaxSize}")
@@ -330,9 +353,9 @@ object Develop {
         // Our own spaces are built from the engine's sRGB output, so ask it for sRGB.
         val ourSpace = if (OutputSpace.isOurs(base.outputColorSpace)) base.outputColorSpace else ""
         val params = (if (ourSpace.isEmpty()) base else base.copy(outputColorSpace = OutputSpace.ENGINE_SRGB)).toParams()
-        val jpeg = SpektraEngine.fromAssets(context.assets).use { engine ->
+        val jpeg = engineFor(context).use { engine ->
             val result = if (preview) engine.simulatePreview(source.image, params) else engine.simulate(source.image, params)
-            result.use { r -> dims = r.width to r.height; toJpeg(r.data, r.width, r.height, r.colorSpace) }
+            result.use { r -> dims = r.width to r.height; toJpeg(r.data, r.width, r.height, r.colorSpace, ourSpace) }
         }
         Log.i("Latent", "render done: ${dims.first}x${dims.second} in ${(System.nanoTime() - t) / 1_000_000} ms")
         log((if (preview) "preview" else "full") + " ${dims.first}×${dims.second} in ${(System.nanoTime() - t) / 1_000_000} ms" +
@@ -481,8 +504,14 @@ object Develop {
     }
 
     /** Guard against a saved recipe pointing at a profile in the wrong slot. */
+    /** True for a film Latent has made: not in the bundled list, but real on disk. */
+    fun isOurStock(id: String) = id.startsWith("celestial_") && EngineAssets.profileFile(id)?.exists() == true
+
     fun sanitised(r: Recipe): Recipe {
-        val film = if (FILMS.any { it.first == r.film }) r.film else FILMS.first().first
+        // A generated emulsion is not in the bundled list but is a real profile in the engine's
+        // folder. Without this it would be swapped for a bundled film and every film Latent
+        // built would develop identically.
+        val film = if (FILMS.any { it.first == r.film } || isOurStock(r.film)) r.film else FILMS.first().first
         val paper = if (PAPERS.any { it.first == r.paper }) r.paper else DEFAULT_PAPER
         val fixed = if (film == r.film && paper == r.paper) r else r.copy(film = film, paper = paper)
         // A slide film has no print stage; a negative must not be scanned directly by accident.
@@ -490,7 +519,7 @@ object Develop {
     }
 
     fun availableProfiles(context: Context): List<String> =
-        SpektraEngine.fromAssets(context.assets).use { it.listProfiles() }
+        Develop.engineFor(context).use { it.listProfiles() }
 
     /**
      * Develop a RAW file.
