@@ -55,14 +55,18 @@ data class Fingerprint(
     val foliageHue: Float,
     val foliageSaturation: Float,
     /**
-     * False when the picture had nothing neutral enough to judge — a sunset, say. Zero would
-     * otherwise read as "perfectly neutral", which is the opposite of "unknown", and with the
-     * heaviest weight in the list that would drag the fit towards grey for no reason.
+     * How much of the picture each figure above was actually measured from, 0 to 1.
+     *
+     * Not every photograph contains everything. A reference with a plant behind the subject has
+     * foliage to measure; a test shot of a plain wall does not — and comparing the two on
+     * foliage produces a large, meaningless difference that the search then spends its effort
+     * chasing. So each figure records its own evidence, and the comparison counts only what
+     * both pictures can actually show.
      *
      * Declared last, and deliberately: the values above are constructed positionally, so a
      * non-number in the middle of them silently shifts every value that follows.
      */
-    val neutralsFound: Boolean = true,
+    val coverage: FloatArray = FloatArray(LABELS.size) { 1f },
 ) {
 
     fun asList() = listOf(
@@ -80,6 +84,7 @@ data class Fingerprint(
     fun distanceTo(other: Fingerprint): Float {
         val a = asList(); val b = other.asList()
         var sum = 0f
+        var used = 0f
         for (i in a.indices) {
             // Scale first, then weight. The figures live on very different scales — mean
             // saturation moves by a few hundredths where a tone position moves by tenths —
@@ -87,12 +92,18 @@ data class Fingerprint(
             // heavily they are weighted. Measured: desaturating by a third moved the distance
             // 0.010 before and 0.057 after, while brightness (which is levelled anyway) fell
             // from 0.045 to 0.042 and is now the least influential, as it should be.
-            // Skip the neutrality figures when either side had no neutrals to measure.
-            if ((i == 7 || i == 8) && (!neutralsFound || !other.neutralsFound)) continue
-            val d = (a[i] - b[i]) * SCALE[i] * WEIGHTS[i]
+            // Only what both pictures can show. A figure one of them had no evidence for
+            // contributes nothing, rather than contributing noise.
+            val shared = min(coverage.getOrElse(i) { 1f }, other.coverage.getOrElse(i) { 1f })
+            if (shared <= 0.001f) continue
+            val w = WEIGHTS[i] * sqrt(shared)
+            used += w * w
+            val d = (a[i] - b[i]) * SCALE[i] * w
             sum += d * d
         }
-        return sqrt(sum / WEIGHTS.sumOf { (it * it).toDouble() }.toFloat())
+        // Divided by the weight of what was actually compared, so a pair of pictures with
+        // little in common is not flattered by the figures that were skipped.
+        return if (used <= 0f) 0f else sqrt(sum / used)
     }
 
     /** The readable names, in the same order as [asList], for showing the comparison. */
@@ -143,7 +154,8 @@ data class Fingerprint(
             return Fingerprint(
                 a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10],
                 a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[18],
-                neutralsFound = list.any { it.neutralsFound },
+                // A set's evidence is the best any of its images had.
+                coverage = FloatArray(LABELS.size) { i -> list.maxOf { it.coverage.getOrElse(i) { 1f } } },
             )
         }
 
@@ -250,6 +262,24 @@ data class Fingerprint(
             }
             fun cast(a: Float, c: Float, m: Int) = if (m == 0) 0f else ((a - c) / m).coerceIn(-0.5f, 0.5f)
 
+            // What each figure was measured from, as a fraction of the picture. Tones and
+            // contrast are always measurable; the rest depend on what is actually in the frame.
+            val total = count.toFloat().coerceAtLeast(1f)
+            val cover = FloatArray(LABELS.size) { 1f }
+            val neutralCover = if (foundNeutrals) 0.25f else 0f
+            cover[7] = neutralCover
+            cover[8] = neutralCover
+            val shadowCover = (dn / total).coerceIn(0f, 1f)
+            val brightCover = (hn / total).coerceIn(0f, 1f)
+            cover[9] = shadowCover; cover[10] = shadowCover
+            cover[11] = brightCover; cover[12] = brightCover
+            cover[13] = 1f                                   // overall saturation: always there
+            cover[14] = min(shadowCover, brightCover)         // its slope needs both ends
+            val skinCover = (skinN / total).coerceIn(0f, 1f)
+            val folCover = (folN / total).coerceIn(0f, 1f)
+            cover[15] = skinCover; cover[16] = skinCover
+            cover[17] = folCover; cover[18] = folCover
+
             return Fingerprint(
                 black = norm(p01),
                 shadow = norm(p10),
@@ -276,6 +306,7 @@ data class Fingerprint(
                 skinSaturation = if (skinN == 0) 0f else (skinS / skinN).coerceIn(0f, 1f),
                 foliageHue = if (folN == 0) 0f else (((folH / folN) - 60f) / 110f).coerceIn(0f, 1f),
                 foliageSaturation = if (folN == 0) 0f else (folS / folN).coerceIn(0f, 1f),
+                coverage = cover,
             )
         }
 

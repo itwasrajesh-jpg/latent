@@ -33,6 +33,8 @@ object Updater {
         data object Idle : State
         data object Checking : State
         data class UpToDate(val version: String) : State
+        /** The release exists but its tag cannot be compared with the running version. */
+        data class Unclear(val tag: String, val current: String) : State
         data class Available(val release: Release) : State
         data class Downloading(val percent: Int) : State
         data class ReadyToInstall(val file: File) : State
@@ -76,9 +78,12 @@ object Updater {
             }
         }
         val current = currentVersion(context)
+        Log.i("Latent", "update check: latest release '$tag' (version '$version'), installed '$current'")
         when {
             url.isBlank() -> State.Failed("the newest release has no APK attached")
             isNewer(version, current) -> State.Available(Release(version, json.optString("body"), url, size))
+            parts(version).size != parts(current).size || parts(version).isEmpty() ->
+                State.Unclear(tag, current)
             else -> State.UpToDate(current)
         }
         } catch (t: Throwable) {
@@ -95,15 +100,24 @@ object Updater {
      * 0.1.99 — comparing them as text would say otherwise.
      */
     fun isNewer(candidate: String, current: String): Boolean {
-        val a = candidate.split('.', '-').mapNotNull { it.filter { c -> c.isDigit() }.toIntOrNull() }
-        val b = current.split('.', '-').mapNotNull { it.filter { c -> c.isDigit() }.toIntOrNull() }
-        for (i in 0 until maxOf(a.size, b.size)) {
-            val x = a.getOrElse(i) { 0 }
-            val y = b.getOrElse(i) { 0 }
-            if (x != y) return x > y
+        val a = parts(candidate)
+        val b = parts(current)
+        // A tag that is not in the same form as the app's version cannot be compared honestly —
+        // a bare "99" would otherwise look newer than "0.1.100", because its first number is
+        // larger. When the shapes differ, say no rather than offering an update that is not one.
+        if (a.isEmpty() || b.isEmpty() || a.size != b.size) {
+            Log.w("Latent", "update: cannot compare '$candidate' with '$current' — different forms")
+            return false
+        }
+        for (i in a.indices) {
+            if (a[i] != b[i]) return a[i] > b[i]
         }
         return false
     }
+
+    private fun parts(v: String): List<Int> =
+        v.trim().trimStart('v', 'V').split('.', '-', '_')
+            .mapNotNull { p -> p.takeWhile { it.isDigit() }.toIntOrNull() }
 
     /** Downloads the APK, reporting progress. Returns the file, or null if it failed. */
     fun download(context: Context, release: Release, onProgress: (Int) -> Unit): File? {

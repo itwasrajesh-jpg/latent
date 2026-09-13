@@ -138,6 +138,7 @@ private fun UpdateRow() {
                         is Updater.State.Idle -> "version $version"
                         is Updater.State.Checking -> "checking…"
                         is Updater.State.UpToDate -> "version ${s.version} — the newest there is"
+                        is Updater.State.Unclear -> "latest release is tagged ${s.tag}; this build is ${s.current} — cannot tell which is newer"
                         is Updater.State.Available -> "version ${s.release.version} is available" +
                             (if (s.release.sizeBytes > 0) " · ${s.release.sizeBytes / 1024 / 1024} MB" else "")
                         is Updater.State.Downloading -> "downloading… ${s.percent}%"

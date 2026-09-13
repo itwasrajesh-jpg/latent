@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,10 +61,10 @@ private const val BASE_STOCK = "kodak_portra_400"
 @Composable
 fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
     val context = LocalContext.current
-    var references by remember { mutableStateOf<List<Pair<Uri, Fingerprint>>>(emptyList()) }
-    var textures by remember { mutableStateOf<List<com.celestial.latent.develop.Texture>>(emptyList()) }
-    var thumbs by remember { mutableStateOf<Map<Uri, Bitmap>>(emptyMap()) }
-    var testShot by remember { mutableStateOf<Uri?>(null) }
+    var references by remember { mutableStateOf(com.celestial.latent.develop.LookSession.references) }
+    var textures by remember { mutableStateOf(com.celestial.latent.develop.LookSession.textures) }
+    var thumbs by remember { mutableStateOf(com.celestial.latent.develop.LookSession.thumbs) }
+    var testShot by remember { mutableStateOf(com.celestial.latent.develop.LookSession.testShot) }
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
@@ -118,7 +119,10 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
         }.start()
     }
 
-    var testIsRaw by remember { mutableStateOf(true) }
+    var testIsRaw by remember { mutableStateOf(com.celestial.latent.develop.LookSession.testIsRaw) }
+    // The test shot is measured as soon as it is chosen, so the screen can say what it and the
+    // references have in common before anything is built.
+    var testFingerprint by remember { mutableStateOf<Fingerprint?>(null) }
     val pickTest = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         runCatching { context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -130,12 +134,13 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
         testIsRaw = name.endsWith(".dng", true) || name.endsWith(".raw", true) || name.endsWith(".arw", true)
         testShot = uri
         status = if (testIsRaw) "test shot chosen (RAW)" else "test shot chosen (JPEG)"
+        if (!testIsRaw) Thread { thumbnailOf(uri)?.let { testFingerprint = Fingerprint.of(it) } }.start()
     }
 
-    var progress by remember { mutableStateOf<com.celestial.latent.develop.Reconstruct.Progress?>(null) }
-    var result by remember { mutableStateOf<com.celestial.latent.develop.Reconstruct.Attempt?>(null) }
-    var resultBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var saved by remember { mutableStateOf("") }
+    var progress by remember { mutableStateOf(com.celestial.latent.develop.LookSession.progress) }
+    var result by remember { mutableStateOf(com.celestial.latent.develop.LookSession.result) }
+    var resultBitmap by remember { mutableStateOf(com.celestial.latent.develop.LookSession.resultBitmap) }
+    var saved by remember { mutableStateOf(com.celestial.latent.develop.LookSession.saved) }
     var expanded by remember { mutableStateOf<Bitmap?>(null) }
 
     /** Builds an emulsion to match the references, on the test shot. */
@@ -188,7 +193,18 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
             .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
     ) {
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("LOOK BUILDER", color = LatentColors.Text, fontSize = 12.sp, letterSpacing = 3.sp)
+            Text("FILM BUILDER", color = LatentColors.Text, fontSize = 12.sp, letterSpacing = 3.sp)
+            if (!com.celestial.latent.develop.LookSession.isEmpty) {
+                Text(
+                    "start over", color = LatentColors.TextDim, fontSize = 11.sp,
+                    modifier = Modifier.combinedClickable(onClick = {
+                        Haptics.tick(context)
+                        com.celestial.latent.develop.LookSession.clear()
+                        references = emptyList(); textures = emptyList(); thumbs = emptyMap()
+                        testShot = null; result = null; resultBitmap = null; progress = null; saved = ""
+                    }).padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
             Text("‹", color = LatentColors.Text, fontSize = 20.sp, modifier = Modifier.combinedClickable(onClick = onBack).padding(horizontal = 8.dp))
         }
 
@@ -219,7 +235,17 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
             color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.padding(bottom = 18.dp),
         )
 
-        val texture = if (textures.isEmpty()) null else com.celestial.latent.develop.Texture.average(textures)
+        // Everything the screen holds is mirrored into the session, so a back gesture does not
+    // throw away a set of references and a fit that took minutes.
+    LaunchedEffect(references, textures, thumbs, testShot, testIsRaw, result, resultBitmap, progress, saved) {
+        com.celestial.latent.develop.LookSession.let { s ->
+            s.references = references; s.textures = textures; s.thumbs = thumbs
+            s.testShot = testShot; s.testIsRaw = testIsRaw
+            s.result = result; s.resultBitmap = resultBitmap; s.progress = progress; s.saved = saved
+        }
+    }
+
+    val texture = if (textures.isEmpty()) null else com.celestial.latent.develop.Texture.average(textures)
         texture?.let { t ->
             Section("READ FROM THEM")
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(LatentColors.Surface).padding(13.dp)) {
@@ -235,11 +261,42 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
             Spacer(Modifier.height(20.dp))
         }
 
+        // What the two sets share decides what can be matched at all, so it is worked out and
+        // shown before a fit is started rather than left to be discovered in the result.
+        val shared = remember(references, testFingerprint) {
+            val ref = if (references.isEmpty()) null else Fingerprint.average(references.map { it.second })
+            val shot = testFingerprint
+            if (ref == null || shot == null) emptyList() else Fingerprint.LABELS.indices.mapNotNull { i ->
+                val c = minOf(ref.coverage.getOrElse(i) { 1f }, shot.coverage.getOrElse(i) { 1f })
+                if (c > 0.01f) Fingerprint.LABELS[i] else null
+            }
+        }
+
         Section("2 · TEST SHOT")
         Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Pill(if (testShot == null) "choose a photo of yours" else "chosen") { pickTest.launch(arrayOf("image/*", "image/x-adobe-dng", "application/octet-stream")) }
         }
-        Text("RAW or JPEG — a blank sheet to try each emulsion on. Nothing is written to it.", color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.padding(bottom = 18.dp))
+        Text(
+            "RAW or JPEG — a blank sheet to try each emulsion on. Nothing is written to it.",
+            color = LatentColors.TextDim, fontSize = 11.sp,
+        )
+        // The fit can only judge what the test shot can show: a picture with no greens and
+        // nothing neutral never tells it what the look does to foliage or to grey.
+        Text(
+            "Choose one with a face, something green and something neutral in it. A shot with none of those leaves the fit guessing.",
+            color = LatentColors.Line, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+        )
+        if (shared.isNotEmpty()) {
+            Text(
+                "both sets show: " + shared.joinToString(", "),
+                color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.padding(bottom = 4.dp),
+            )
+            val missing = Fingerprint.LABELS.filterNot { it in shared }
+            if (missing.isNotEmpty()) Text(
+                "not comparable here: " + missing.joinToString(", ") + " — these are left out of the match rather than guessed at",
+                color = LatentColors.Line, fontSize = 11.sp, modifier = Modifier.padding(bottom = 18.dp),
+            ) else Spacer(Modifier.height(14.dp))
+        } else Spacer(Modifier.height(10.dp))
 
         if (status.isNotEmpty()) Text(status, color = LatentColors.Amber, fontSize = 11.sp, modifier = Modifier.padding(bottom = 14.dp))
 
