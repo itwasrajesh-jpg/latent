@@ -281,10 +281,8 @@ object FilmDiffusion {
      * against a direct reflect-padded convolution — the two agree to rounding (1e-16).
      */
     private fun convolve(src: FloatArray, w: Int, h: Int, kernel: FloatArray, r: Int, out: FloatArray) {
-        val ks = 2 * r + 1
-        // A tile plus its border must fit an FFT size the library handles well; bigger tiles
-        // mean fewer transforms, so take the largest that stays within a sensible buffer.
-        // Prefer the largest buffer we allow: fewer, bigger transforms beat many small ones.
+        // A tile plus its border must fit an FFT size the library handles well, and the largest
+        // buffer we allow wins: fewer, bigger transforms beat many small ones.
         val fftSize = if (2 * r + 64 <= MAX_FFT) MAX_FFT else nextGood(4 * r)
         val tile = fftSize - 2 * r
         if (tile < 16) {
