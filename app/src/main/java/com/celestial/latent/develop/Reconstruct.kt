@@ -26,7 +26,8 @@ object Reconstruct {
     private fun printFor(base: org.json.JSONObject): String? =
         base.optJSONObject("info")?.optString("target_print")?.takeIf { it.isNotBlank() && it != "null" }
 
-    data class Attempt(val shape: Emulsion.Shape, val distance: Float, val jpeg: ByteArray?)
+    /** @param baseEv the starting film exposure the fit worked from; the stock needs it too. */
+    data class Attempt(val shape: Emulsion.Shape, val distance: Float, val jpeg: ByteArray?, val baseEv: Float = 0f)
 
     data class Progress(val tried: Int, val total: Int, val best: Attempt?, val note: String)
 
@@ -58,6 +59,28 @@ object Reconstruct {
         }.getOrNull() ?: return null
 
         val holdsLaneEarly = DevelopQueue.engineLane.tryAcquire()
+        // One alignment before the search, not a levelling during it.
+        //
+        // The only brightness control in the search is the print exposure, which spans about
+        // two and a half stops. If the test shot sits further from the references than that —
+        // an underexposed frame, say — the fit would run out of range and stop at its limit.
+        // So the film exposure is set once, from what the engine would meter, and the search
+        // moves the print exposure around that. The result is still a deliberate brightness
+        // rather than one levelled away on every attempt.
+        // Metered here rather than through LookBaker, which competes for the same engine lane
+        // this search already holds — it would have found it busy, returned nothing, and the
+        // alignment would have silently done nothing at all.
+        val baseEv = runCatching {
+            SpektraEngine(dir).use { engine ->
+                val g = engine.exposureGain(
+                    source.image,
+                    Develop.sanitised(Recipe(film = baseStock, autoExposure = true)).toParams(),
+                )
+                if (g > 0.01f) (Math.log(g.toDouble()) / Math.log(2.0)).toFloat().coerceIn(-4f, 4f) else 0f
+            }
+        }.getOrDefault(0f)
+        onProgress(Progress(0, rounds, null, "starting exposure ${"%+.1f".format(baseEv)} EV"))
+
         var best: Attempt? = null
         var current = Emulsion.Shape()
         var currentDistance = Float.MAX_VALUE
@@ -82,7 +105,13 @@ object Reconstruct {
                     printContrast = shape.printContrast,
                     grain = false, halation = false, glare = false, diffusion = false,
                     previewMaxSize = 320,
-                    autoExposure = true,      // each attempt is levelled, so brightness is not what is matched
+                    exposureEv = baseEv,
+                    // Brightness is matched, not levelled. When this fit was first written the
+                    // search could not set exposure, so every attempt was auto-levelled and the
+                    // tone positions were weighted down as meaningless. The search now controls
+                    // the print exposure, so brightness is something it can and should match —
+                    // and the washed, lifted results were the old assumption still in force.
+                    autoExposure = false,
                 )
                 // A fresh engine each attempt: the profile changes between them, and an engine
                 // that had already read the old one would keep using it. Creating one reads the
@@ -91,7 +120,7 @@ object Reconstruct {
                     val (bytes, _) = Develop.renderWith(engine, context, source, recipe, preview = true)
                     val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@runCatching null
                     val fp = Fingerprint.of(bmp)
-                    Attempt(shape, fp.distanceTo(target), if (keepImage) bytes else null)
+                    Attempt(shape, fp.distanceTo(target), if (keepImage) bytes else null, baseEv)
                 }
             }.getOrNull()
         }
@@ -115,7 +144,9 @@ object Reconstruct {
             val v = current.asArray().copyOf()
             // The print controls set the colour balance and were fixed until now, so they are
             // tried more often early on, when there is most to gain from them.
-            val which = if (tried < rounds / 3 && random.nextInt(100) < 45) 15 + random.nextInt(4)
+            // The print controls — balance, exposure and contrast — set the colour and the
+            // brightness, and are worth far more attempts than any single curve parameter.
+            val which = if (random.nextInt(100) < 50) 15 + random.nextInt(4)
             else random.nextInt(Emulsion.Shape.COUNT)
             val step = Emulsion.Shape.STEP[which] * temperature
             v[which] += if (random.nextBoolean()) step else -step
@@ -153,6 +184,69 @@ object Reconstruct {
      * genuinely different at zero and hide the search's progress. This eases off instead, and
      * never quite reaches either end.
      */
+    /**
+     * The recipe a finished fit develops with: the emulsion it built, the print settings it
+     * chose, whatever was adjusted by hand afterwards, and the texture read from the references.
+     * One place, so the preview, the adjustments and the saved stock cannot drift apart.
+     */
+    fun recipeFor(
+        stockId: String,
+        attempt: Attempt,
+        paper: String?,
+        tweak: Tweak = Tweak(),
+        texture: Texture? = null,
+        previewSize: Int = 0,
+    ): Recipe {
+        var r = attempt.shape.applyPrintTo(
+            Recipe(film = stockId, exposureEv = attempt.baseEv, previewMaxSize = previewSize),
+        ).copy(
+            paper = paper ?: Develop.DEFAULT_PAPER,
+            scanFilm = paper == null,
+            // Brightness in stops, applied where brightness actually lives: the enlarger's
+            // exposure, which runs the other way — more light on the paper, a darker print.
+            printExposure = (attempt.shape.printExposure / Math.pow(2.0, tweak.brightness.toDouble()).toFloat())
+                .coerceIn(0.4f, 2.2f),
+            yFilterShift = (attempt.shape.yFilter + tweak.warmCool).coerceIn(-20f, 20f),
+            mFilterShift = (attempt.shape.mFilter + tweak.greenMagenta).coerceIn(-20f, 20f),
+            outputColorSpace = tweak.outputSpace,
+        )
+        texture?.let { r = it.applyTo(r) }
+        if (tweak.diffusion > 0.001f) {
+            r = r.copy(diffusion = true, diffusionFamily = tweak.diffusionFamily, diffusionStrength = tweak.diffusion)
+        }
+        return r
+    }
+
+    /** Develops the test shot again with the fit's answer plus any adjustments. */
+    fun render(
+        context: Context,
+        attempt: Attempt,
+        testShot: Uri,
+        isRaw: Boolean,
+        baseStock: String,
+        tweak: Tweak,
+        texture: Texture?,
+    ): ByteArray? {
+        val dir = EngineAssets.directory ?: return null
+        val base = Emulsion.baseProfile(context, baseStock) ?: return null
+        val stockId = "celestial_working"
+        Emulsion.write(base, attempt.shape, stockId, "Working") ?: return null
+        if (!DevelopQueue.engineLane.tryAcquire()) return null
+        return try {
+            val source = if (isRaw) Develop.openRaw(context, testShot, 640) else Develop.openImage(context, testShot, 640)
+            source.use { src ->
+                val recipe = recipeFor(stockId, attempt, printFor(base), tweak, texture, previewSize = 560)
+                Develop.denoiseSource(src, recipe, Develop.isoOf(context, testShot))
+                Develop.fastDiffusionSource(src, recipe, preview = true)
+                SpektraEngine(dir).use { engine -> Develop.renderWith(engine, context, src, recipe, preview = true).first }
+            }
+        } catch (t: Throwable) {
+            Log.e("Latent", "could not re-render the result", t); null
+        } finally {
+            DevelopQueue.engineLane.release()
+        }
+    }
+
     fun percent(distance: Float?): String =
         if (distance == null) "—"
         else "${(100.0 * Math.exp(-1.2 * distance)).toInt().coerceIn(0, 99)}%"

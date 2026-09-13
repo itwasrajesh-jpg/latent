@@ -132,9 +132,10 @@ data class Fingerprint(
         )
 
         private val WEIGHTS = floatArrayOf(
-            // Brightness is levelled in every attempt, so where the tones sit matters far less
-            // than how they relate to each other.
-            0.25f, 0.4f, 0.4f, 0.4f, 0.25f,
+            // Where the tones sit. These were weighted down when every attempt was levelled to
+            // the same brightness; the search sets the print exposure now, so they matter again.
+            // The black point most of all: a lifted black is what makes a print look washed.
+            1.4f, 1.1f, 1.0f, 1.0f, 0.9f,
             1.5f, 1.3f,                        // contrast and roll-off carry a lot
             // Neutrality weighs heaviest: grey staying grey is what the eye checks first, and
             // nothing else in this list catches an overall drift.

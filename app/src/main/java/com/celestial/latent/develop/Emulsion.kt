@@ -61,6 +61,10 @@ object Emulsion {
             mFilterShift = mFilter,
             printExposure = printExposure,
             printContrast = printContrast,
+            // The fit set the brightness deliberately through the print exposure, so the stock
+            // must not level it away — that would make the saved film look nothing like the
+            // result that was approved.
+            autoExposure = false,
         )
 
         companion object {

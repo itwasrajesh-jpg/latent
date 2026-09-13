@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -153,6 +154,36 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
     var resultBitmap by remember { mutableStateOf(com.celestial.latent.develop.LookSession.resultBitmap) }
     var saved by remember { mutableStateOf(com.celestial.latent.develop.LookSession.saved) }
     var expanded by remember { mutableStateOf<Bitmap?>(null) }
+    // Adjustments made to the fit's answer by hand. These are the same controls the search
+    // uses, so a nudge here refines its result rather than layering something on top of it.
+    var tweak by remember { mutableStateOf(com.celestial.latent.develop.LookSession.tweak) }
+    var tweaking by remember { mutableStateOf(false) }
+    // A change that arrives while a develop is running is not thrown away: it runs again when
+    // that one finishes, so the picture always ends up matching the controls.
+    var rerenderPending by remember { mutableStateOf(false) }
+
+    /** Re-develops the test shot with the fit's emulsion plus whatever has been adjusted. */
+    fun rerender() {
+        val best = result ?: return
+        val src = testShot ?: return
+        if (tweaking) { rerenderPending = true; return }
+        tweaking = true
+        Thread {
+            do {
+                rerenderPending = false
+                val current = tweak
+                runCatching {
+                    com.celestial.latent.develop.Reconstruct.render(
+                        context, best, src, testIsRaw, BASE_STOCK, current, texture,
+                    )?.let { bytes ->
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { resultBitmap = it }
+                    }
+                }
+                // If the controls moved while that was developing, develop once more.
+            } while (rerenderPending)
+            tweaking = false
+        }.start()
+    }
 
     /** Builds an emulsion to match the references, on the test shot. */
     fun reconstruct(target: Fingerprint) {
@@ -213,6 +244,7 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
                         com.celestial.latent.develop.LookSession.clear()
                         references = emptyList(); textures = emptyList(); thumbs = emptyMap()
                         testShot = null; result = null; resultBitmap = null; progress = null; saved = ""
+                        tweak = com.celestial.latent.develop.Tweak()
                     }).padding(horizontal = 8.dp, vertical = 4.dp),
                 )
             }
@@ -248,11 +280,12 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
 
         // Everything the screen holds is mirrored into the session, so a back gesture does not
     // throw away a set of references and a fit that took minutes.
-    LaunchedEffect(references, textures, thumbs, testShot, testIsRaw, result, resultBitmap, progress, saved) {
+    LaunchedEffect(references, textures, thumbs, testShot, testIsRaw, result, resultBitmap, progress, saved, tweak) {
         com.celestial.latent.develop.LookSession.let { s ->
             s.references = references; s.textures = textures; s.thumbs = thumbs
             s.testShot = testShot; s.testIsRaw = testIsRaw
             s.result = result; s.resultBitmap = resultBitmap; s.progress = progress; s.saved = saved
+            s.tweak = tweak
         }
     }
 
@@ -386,6 +419,49 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
                 color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp, bottom = 14.dp),
             )
 
+            // Adjust the fit's answer by eye. These are the same controls the search uses, so a
+            // nudge refines its result rather than layering something over it — and what is
+            // saved is what is shown.
+            Section("ADJUST")
+            Tweaker("Brightness", tweak.brightness, -1.5f, 1.5f, "%+.2f EV",
+                onChange = { tweak = tweak.copy(brightness = it) }, onRelease = { rerender() })
+            Tweaker("Warm / cool", tweak.warmCool, -12f, 12f, "%+.1f",
+                onChange = { tweak = tweak.copy(warmCool = it) }, onRelease = { rerender() })
+            Tweaker("Green / magenta", tweak.greenMagenta, -12f, 12f, "%+.1f",
+                onChange = { tweak = tweak.copy(greenMagenta = it) }, onRelease = { rerender() })
+            Tweaker("Diffusion", tweak.diffusion, 0f, 1f, "%.2f",
+                onChange = { tweak = tweak.copy(diffusion = it) }, onRelease = { rerender() })
+            if (tweak.diffusion > 0.001f) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("glimmerglass", "black pro mist", "pro mist", "cinebloom").forEach { name ->
+                        val id = name.replace(' ', '_')
+                        val on = tweak.diffusionFamily == id
+                        Text(
+                            name, color = if (on) LatentColors.AmberInk else LatentColors.Text, fontSize = 10.sp,
+                            modifier = Modifier.clip(RoundedCornerShape(999.dp))
+                                .background(if (on) LatentColors.Amber else LatentColors.Surface)
+                                .combinedClickable(onClick = { tweak = tweak.copy(diffusionFamily = id); rerender() })
+                                .padding(horizontal = 9.dp, vertical = 5.dp),
+                        )
+                    }
+                }
+            }
+            Text("Output", color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("SRGB" to "sRGB", "DISPLAY_P3" to "Display P3", "REC709_24" to "Rec.709", "ADOBE_RGB" to "Adobe RGB").forEach { (id, label) ->
+                    val on = tweak.outputSpace == id
+                    Text(
+                        label, color = if (on) LatentColors.AmberInk else LatentColors.Text, fontSize = 10.sp,
+                        modifier = Modifier.clip(RoundedCornerShape(999.dp))
+                            .background(if (on) LatentColors.Amber else LatentColors.Surface)
+                            .combinedClickable(onClick = { tweak = tweak.copy(outputSpace = id); rerender() })
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                    )
+                }
+            }
+            if (tweaking) Text("re-developing…", color = LatentColors.Amber, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp))
+            Spacer(Modifier.height(18.dp))
+
             Row(Modifier.fillMaxWidth().padding(bottom = 24.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Pill("save as a stock", accent = true) {
                     val name = "Celestial " + (references.size * 7 % 90 + 10)
@@ -395,8 +471,13 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
                         // halation, bloom and glare, not the defaults.
                         // The emulsion is in the profile; how it is printed is in the recipe.
                         // Both are needed, or the saved stock will not match what was built.
-                        var recipe = best.shape.applyPrintTo(com.celestial.latent.develop.Recipe(film = id))
-                        texture?.let { recipe = it.applyTo(recipe) }
+                        // One builder for the preview, the adjustments and the stock, so what
+                        // is saved is exactly what is on screen.
+                        val paper = com.celestial.latent.develop.Emulsion.baseProfile(context, BASE_STOCK)
+                            ?.optJSONObject("info")?.optString("target_print")?.takeIf { it.isNotBlank() }
+                        val recipe = com.celestial.latent.develop.Reconstruct.recipeFor(
+                            id, best, paper, tweak, texture,
+                        )
                         com.celestial.latent.develop.Recipes.save(context, name, recipe)
                         "saved as $name — it is in the film strip"
                     }
@@ -404,6 +485,38 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
             }
             if (saved.isNotEmpty()) Text(saved, color = LatentColors.Amber, fontSize = 11.sp, modifier = Modifier.padding(bottom = 20.dp))
         }
+    }
+}
+
+/** A slider that reports as it moves, for adjusting a finished fit. */
+@Composable
+private fun Tweaker(
+    label: String,
+    value: Float,
+    from: Float,
+    to: Float,
+    format: String,
+    onChange: (Float) -> Unit,
+    onRelease: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, color = LatentColors.TextDim, fontSize = 11.sp)
+            Text(format.format(value), color = LatentColors.Text, fontSize = 11.sp)
+        }
+        androidx.compose.material3.Slider(
+            value = value.coerceIn(from, to),
+            // The number follows the finger; the develop happens when it is let go. Developing
+            // during the drag would start dozens of renders and waste all but one.
+            onValueChange = onChange,
+            onValueChangeFinished = onRelease,
+            valueRange = from..to,
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = LatentColors.Amber,
+                activeTrackColor = LatentColors.Amber,
+                inactiveTrackColor = LatentColors.Surface,
+            ),
+        )
     }
 }
 
