@@ -226,7 +226,13 @@ object FilmDiffusion {
                 f.put(i * 3 + c, ((1.0 - mix) * plane[i] + mix * blurred).toFloat())
             }
         }
-        Log.i("Latent", "diffusion: $familyName strength=$strength radius=${radius}px (sharp ${sharpRadius}, bloom 1/$bloomStep) ${width}x$height in ${(System.nanoTime() - t0) / 1_000_000} ms")
+        Log.i(
+            "Latent",
+            "diffusion: $familyName strength=$strength mix=${"%.3f".format(mix)} " +
+                "radius=${radius}px sharp=${mainRadius}px split=$split bloom=1/$bloomStep " +
+                "λcore=${"%.1f".format(corePx.max())}px λhalo=${"%.1f".format(haloPx.max())}px λbloom=${"%.1f".format(bloomPx.max())}px " +
+                "${width}x$height in ${(System.nanoTime() - t0) / 1_000_000} ms",
+        )
     }
 
     /**
@@ -291,13 +297,27 @@ object FilmDiffusion {
             convolve(src, w, h, trimmed, rCap, out)
             return
         }
+        // The transform plan and both buffers are made once and reused for every tile: making
+        // them per tile meant tens of 33 MB allocations per channel, which the collector then
+        // had to chase.
+        val fft = FloatFFT_2D(fftSize.toLong(), fftSize.toLong())
+        val a = FloatArray(fftSize * fftSize * 2)
+        val b = FloatArray(fftSize * fftSize * 2)
+        // The kernel's transform is the same for every tile, so it is done once.
+        val ks = 2 * r + 1
+        for (y in 0 until ks) {
+            val row = y * fftSize * 2
+            for (x in 0 until ks) b[row + x * 2] = kernel[y * ks + x]
+        }
+        fft.complexForward(b)
+
         var ty = 0
         while (ty < h) {
             val th = min(tile, h - ty)
             var tx = 0
             while (tx < w) {
                 val tw = min(tile, w - tx)
-                convolveTile(src, w, h, tx, ty, tw, th, kernel, r, fftSize, out)
+                convolveTile(src, w, h, tx, ty, tw, th, r, fftSize, out, fft, a, b)
                 tx += tile
             }
             ty += tile
@@ -307,14 +327,13 @@ object FilmDiffusion {
     private fun convolveTile(
         src: FloatArray, w: Int, h: Int,
         tx: Int, ty: Int, tw: Int, th: Int,
-        kernel: FloatArray, r: Int, fftSize: Int, out: FloatArray,
+        r: Int, fftSize: Int, out: FloatArray,
+        fft: FloatFFT_2D, a: FloatArray, b: FloatArray,
     ) {
-        val ks = 2 * r + 1
         val n = fftSize
         // Interleaved complex, which the library's complexForward/complexInverse take without
-        // ambiguity about layout.
-        val a = FloatArray(n * n * 2)
-        val b = FloatArray(n * n * 2)
+        // ambiguity about layout. `a` is reused, so it must be cleared first.
+        java.util.Arrays.fill(a, 0f)
         for (y in 0 until th + 2 * r) {
             val sy = reflect(ty + y - r, h)
             val row = y * n * 2
@@ -322,13 +341,8 @@ object FilmDiffusion {
                 a[row + x * 2] = src[sy * w + reflect(tx + x - r, w)]
             }
         }
-        for (y in 0 until ks) {
-            val row = y * n * 2
-            for (x in 0 until ks) b[row + x * 2] = kernel[y * ks + x]
-        }
-        val fft = FloatFFT_2D(n.toLong(), n.toLong())
         fft.complexForward(a)
-        fft.complexForward(b)
+        // b already holds the kernel's transform.
         var i = 0
         while (i < a.size) {
             val ar = a[i]; val ai = a[i + 1]; val br = b[i]; val bi = b[i + 1]

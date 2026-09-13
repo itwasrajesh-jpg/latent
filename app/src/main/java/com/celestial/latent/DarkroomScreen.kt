@@ -386,7 +386,10 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                             "The same kernel as the engine's, computed with an FFT: seconds rather than minutes. It runs earlier in the chain than the engine's own, so at the same strength it can read a little softer — raise Strength to match if you are comparing them."
                         else
                             "The engine's own filter, computed directly. Identical by definition, and the slowest stage by far: minutes at full size.")
-                        Chips(DIFFUSION_FAMILIES, recipe.diffusionFamily) { set { copy(diffusionFamily = it) } }
+                        // Picking a filter turns it on: choosing a family and then finding every
+                        // control greyed out was a dead end.
+                        Chips(DIFFUSION_FAMILIES, recipe.diffusionFamily) { set { copy(diffusionFamily = it, diffusion = true) } }
+                        if (!recipe.diffusion) Note("The lens filter is off — turn on LENS FILTER above, or tap a filter name, to adjust it.")
                         S("Strength", recipe.diffusionStrength, 0f, 1f, "%.2f", recipe.diffusion) { set { copy(diffusionStrength = it) } }
                         S("Spatial scale", recipe.diffusionScale, 0.2f, 3f, "%.2f", recipe.diffusion) { set { copy(diffusionScale = it) } }
                         S("Core intensity", recipe.diffusionCore, 0f, 3f, "%.2f", recipe.diffusion) { set { copy(diffusionCore = it) } }
@@ -397,7 +400,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                         S("Bloom size", recipe.diffusionBloomSize, 0.2f, 3f, "%.2f", recipe.diffusion) { set { copy(diffusionBloomSize = it) } }
                         S("Halo warmth", recipe.diffusionWarmth, -1f, 1f, "%+.2f", recipe.diffusion) { set { copy(diffusionWarmth = it) } }
                         Head("ENLARGER FILTER", recipe.printDiffusion) { set { copy(printDiffusion = it) } }
-                        Chips(DIFFUSION_FAMILIES, recipe.printDiffusionFamily) { set { copy(printDiffusionFamily = it) } }
+                        Chips(DIFFUSION_FAMILIES, recipe.printDiffusionFamily) { set { copy(printDiffusionFamily = it, printDiffusion = true) } }
                         S("Strength", recipe.printDiffusionStrength, 0f, 1f, "%.2f", recipe.printDiffusion) { set { copy(printDiffusionStrength = it) } }
                     }
                     "camera" -> {

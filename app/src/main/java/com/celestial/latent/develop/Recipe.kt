@@ -251,7 +251,10 @@ data class Recipe(
     fun summary(): String = "film=$film paper=$paper scanFilm=$scanFilm ev=$exposureEv autoExp=$autoExposure " +
         "contrast=$filmContrast printExp=$printExposure printComp=$printExposureCompensation " +
         "grain=$grain(${grainSizeUm2}, scale=$grainParticleScale) halation=$halation($halationAmount) " +
-        "dir=$dir($dirAmount) glare=$glare diffusion=$diffusion${if (diffusion) (if (fastDiffusion) "(fft)" else "(engine-direct)") else ""} out=$outputColorSpace/$outputGamutCompress"
+        "dir=$dir($dirAmount) glare=$glare " +
+        "lensFilter=$diffusion${if (diffusion) "/$diffusionFamily/s=$diffusionStrength/scale=$diffusionScale/core=$diffusionCore/halo=$diffusionHalo/bloom=$diffusionBloom" else ""} " +
+        "enlargerFilter=$printDiffusion${if (printDiffusion) "/$printDiffusionFamily/s=$printDiffusionStrength" else ""} " +
+        "out=$outputColorSpace/$outputGamutCompress"
 
     fun toJson(): String = JSONObject().apply {
         put("film", film); put("paper", paper)
