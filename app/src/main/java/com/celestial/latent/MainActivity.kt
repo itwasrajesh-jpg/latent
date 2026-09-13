@@ -70,8 +70,6 @@ private fun Root() {
     var darkroomIsRaw by remember { mutableStateOf(true) }
     var crash by remember { mutableStateOf(CrashLog.read(context)) }
     var screen by remember { mutableStateOf("camera") }
-    // Shown once per launch, over the camera, which opens behind it.
-    var opening by remember { mutableStateOf(settings.openingAnimation) }
     crash?.let { text ->
         Column(Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().navigationBarsPadding().padding(16.dp)) {
             Text("Latent crashed last time", color = LatentColors.TextBright, fontSize = 18.sp)
@@ -92,6 +90,9 @@ private fun Root() {
         return
     }
     var settings by remember { mutableStateOf(AppSettings.load(context)) }
+    // Shown once per launch, over the camera, which opens behind it. Declared after settings,
+    // which it reads.
+    var opening by remember { mutableStateOf(settings.openingAnimation) }
     var controllerRef by remember { mutableStateOf<com.celestial.latent.camera.CameraController?>(null) }
     var vendorEcho by remember { mutableStateOf("") }
 
