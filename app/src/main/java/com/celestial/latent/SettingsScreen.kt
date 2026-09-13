@@ -20,6 +20,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -74,6 +79,7 @@ fun SettingsScreen(settings: AppSettings, onChange: (AppSettings) -> Unit, onOpe
         ) { onChange(settings.copy(defaultLensId = it)) }
 
         Section("Film")
+        UpdateRow()
         ToggleRow("Opening animation", "The name develops in when the app starts. Tap to skip it at any time.", settings.openingAnimation) { onChange(settings.copy(openingAnimation = it)) }
         ToggleRow("Film in the viewfinder", "Draws the preview through the film look. Turn off to use the plain camera preview.", settings.filmPreview) { onChange(settings.copy(filmPreview = it)) }
         ToggleRow("Let the film level the exposure", "Off: the camera decides brightness — what you expose is what develops. On: the engine brightens or darkens every shot to its own target, which cancels out the EV dial.", settings.engineAutoExposure) { onChange(settings.copy(engineAutoExposure = it)) }
@@ -107,6 +113,83 @@ private fun Section(title: String) {
     Spacer(Modifier.height(14.dp))
     Text(title.uppercase(), color = LatentColors.TextDim, fontSize = 11.sp, letterSpacing = 2.sp)
     Spacer(Modifier.height(6.dp))
+}
+
+/**
+ * Checking for and installing a new build, without leaving the app.
+ *
+ * Latent is not on a store, so this goes to the project's own releases: it compares the newest
+ * version with the one running, downloads the APK, and hands it to Android's installer — which
+ * asks before it does anything.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun UpdateRow() {
+    val context = LocalContext.current
+    var state by remember { mutableStateOf<Updater.State>(Updater.State.Idle) }
+    val version = remember { Updater.currentVersion(context) }
+
+    Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Check for an update", color = LatentColors.TextBright, fontSize = 15.sp)
+                Text(
+                    when (val s = state) {
+                        is Updater.State.Idle -> "version $version"
+                        is Updater.State.Checking -> "checking…"
+                        is Updater.State.UpToDate -> "version ${s.version} — the newest there is"
+                        is Updater.State.Available -> "version ${s.release.version} is available" +
+                            (if (s.release.sizeBytes > 0) " · ${s.release.sizeBytes / 1024 / 1024} MB" else "")
+                        is Updater.State.Downloading -> "downloading… ${s.percent}%"
+                        is Updater.State.ReadyToInstall -> "ready to install"
+                        is Updater.State.Failed -> s.reason
+                    },
+                    color = if (state is Updater.State.Failed) LatentColors.Text else LatentColors.TextDim,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            val label = when (state) {
+                is Updater.State.Available -> "download"
+                is Updater.State.ReadyToInstall -> "install"
+                is Updater.State.Checking, is Updater.State.Downloading -> "…"
+                else -> "check"
+            }
+            Text(
+                label, color = LatentColors.AmberInk, fontSize = 12.sp,
+                modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber)
+                    .combinedClickable(onClick = {
+                        Haptics.tick(context)
+                        when (val s = state) {
+                            is Updater.State.Available -> {
+                                state = Updater.State.Downloading(0)
+                                Thread {
+                                    val file = Updater.download(context, s.release) { p -> state = Updater.State.Downloading(p) }
+                                    state = if (file == null) Updater.State.Failed("the download did not finish")
+                                    else Updater.State.ReadyToInstall(file)
+                                }.start()
+                            }
+                            is Updater.State.ReadyToInstall -> {
+                                // Android needs permission to install at all; it is asked once.
+                                if (!Updater.canInstall(context)) Updater.requestInstallPermission(context)
+                                else Updater.install(context, s.file)
+                            }
+                            is Updater.State.Checking, is Updater.State.Downloading -> {}
+                            else -> {
+                                state = Updater.State.Checking
+                                Thread { state = Updater.check(context) }.start()
+                            }
+                        }
+                    }).padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
+        if (state is Updater.State.ReadyToInstall && !Updater.canInstall(context)) {
+            Text(
+                "Android will ask you to allow Latent to install apps — it only needs this once.",
+                color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+    }
 }
 
 @Composable

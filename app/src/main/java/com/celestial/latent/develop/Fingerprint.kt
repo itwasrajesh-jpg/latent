@@ -30,6 +30,23 @@ data class Fingerprint(
     val contrast: Float,
     /** How gently the brightest tones flatten off — film's shoulder. */
     val shoulderRoll: Float,
+    /**
+     * How far the picture's own neutral tones sit from grey.
+     *
+     * The casts below compare one end of the picture with the other, so a look that drifts
+     * everything warm together passes them unnoticed — which is exactly what happened: builds
+     * came out peach, with cream whites, while scoring well. This asks a different question:
+     * of the tones this picture treats as neutral, how far from grey are they? It is also
+     * immune to brightness, which is levelled in every attempt anyway.
+     */
+    val neutralWarmth: Float,
+    val neutralGreen: Float,
+    /**
+     * False when the picture had nothing neutral enough to judge — a sunset, say. Zero would
+     * otherwise read as "perfectly neutral", which is the opposite of "unknown", and with the
+     * heaviest weight in the list that would drag the fit towards grey for no reason.
+     */
+    val neutralsFound: Boolean = true,
     /** Colour cast in the shadows and in the highlights: the crossover that names a film. */
     val shadowWarmth: Float,
     val shadowGreen: Float,
@@ -47,6 +64,7 @@ data class Fingerprint(
 
     fun asList() = listOf(
         black, shadow, mid, highlight, white, contrast, shoulderRoll,
+        neutralWarmth, neutralGreen,
         shadowWarmth, shadowGreen, highlightWarmth, highlightGreen,
         saturation, saturationSlope, skinHue, skinSaturation, foliageHue, foliageSaturation,
     )
@@ -66,6 +84,8 @@ data class Fingerprint(
             // heavily they are weighted. Measured: desaturating by a third moved the distance
             // 0.010 before and 0.057 after, while brightness (which is levelled anyway) fell
             // from 0.045 to 0.042 and is now the least influential, as it should be.
+            // Skip the neutrality figures when either side had no neutrals to measure.
+            if ((i == 7 || i == 8) && (!neutralsFound || !other.neutralsFound)) continue
             val d = (a[i] - b[i]) * SCALE[i] * WEIGHTS[i]
             sum += d * d
         }
@@ -77,6 +97,7 @@ data class Fingerprint(
         val LABELS = listOf(
             "black point", "shadows", "midtones", "highlights", "white point",
             "contrast", "highlight roll-off",
+            "neutrals: warm", "neutrals: green",
             "shadow warmth", "shadow green", "highlight warmth", "highlight green",
             "saturation", "saturation with brightness",
             "skin hue", "skin saturation", "foliage hue", "foliage saturation",
@@ -90,6 +111,7 @@ data class Fingerprint(
         private val SCALE = floatArrayOf(
             1f, 1f, 1f, 1f, 1f,               // tone positions: already 0..1
             1f, 1f,                            // contrast and roll-off: already comparable
+            3f, 3f,                            // neutrality
             4f, 4f, 4f, 4f,                    // colour casts: small numbers, big effect
             4f, 4f,                            // saturation likewise
             2f, 4f, 2f, 4f,                    // skin and foliage
@@ -100,6 +122,9 @@ data class Fingerprint(
             // than how they relate to each other.
             0.25f, 0.4f, 0.4f, 0.4f, 0.25f,
             1.5f, 1.3f,                        // contrast and roll-off carry a lot
+            // Neutrality weighs heaviest: grey staying grey is what the eye checks first, and
+            // nothing else in this list catches an overall drift.
+            3.2f, 2.8f,
             1.8f, 1.6f, 1.8f, 1.6f,            // the crossover is the film's signature
             2.4f, 2.0f,                        // saturation behaviour
             2.0f, 2.0f, 1.2f, 1.4f,            // skin most of all, then foliage
@@ -114,7 +139,8 @@ data class Fingerprint(
             val a = FloatArray(LABELS.size) { sums[it] / n }
             return Fingerprint(
                 a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10],
-                a[11], a[12], a[13], a[14], a[15], a[16],
+                a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[18],
+                neutralsFound = list.any { it.neutralsFound },
             )
         }
 
@@ -163,6 +189,42 @@ data class Fingerprint(
             fun norm(v: Float) = ((v - p01) / span).coerceIn(0f, 1f)
 
             // Colour cast, measured where it shows: the darkest and brightest fifths.
+            // The picture's own neutrals: the least colourful of its mid-tones. Whatever this
+            // photograph treats as grey, that is what should come out grey.
+            val midLow = pct(0.25f); val midHigh = pct(0.85f)
+            var neutralWarm = 0f
+            var neutralGreenLean = 0f
+            var foundNeutrals = false
+            run {
+                val sats = ArrayList<Float>(count / 4)
+                for (k in 0 until count) {
+                    if (lum[k] <= midLow || lum[k] >= midHigh) continue
+                    val mx = max(r[k], max(g[k], b[k]))
+                    val mn = min(r[k], min(g[k], b[k]))
+                    sats.add(if (mx > 0.04f) (mx - mn) / mx else 0f)
+                }
+                if (sats.size >= 50) {
+                    sats.sort()
+                    val limit = sats[(sats.size * 35 / 100).coerceIn(0, sats.size - 1)]
+                    var sr = 0.0; var sg = 0.0; var sb = 0.0; var n = 0
+                    for (k in 0 until count) {
+                        if (lum[k] <= midLow || lum[k] >= midHigh) continue
+                        val mx = max(r[k], max(g[k], b[k]))
+                        val mn = min(r[k], min(g[k], b[k]))
+                        val sat = if (mx > 0.04f) (mx - mn) / mx else 0f
+                        if (sat > limit) continue
+                        sr += r[k].toDouble(); sg += g[k].toDouble(); sb += b[k].toDouble(); n++
+                    }
+                    if (n >= 20) {
+                        val mr = sr / n; val mg = sg / n; val mb = sb / n
+                        val mean = ((mr + mg + mb) / 3.0).coerceAtLeast(1e-4)
+                        neutralWarm = ((mr - mb) / mean).toFloat().coerceIn(-1.5f, 1.5f)
+                        neutralGreenLean = ((mg - (mr + mb) / 2.0) / mean).toFloat().coerceIn(-1.5f, 1.5f)
+                        foundNeutrals = true
+                    }
+                }
+            }
+
             val darkCut = pct(0.20f); val brightCut = pct(0.80f)
             var dr = 0f; var dg = 0f; var db = 0f; var dn = 0
             var hr = 0f; var hg = 0f; var hb = 0f; var hn = 0
@@ -195,6 +257,9 @@ data class Fingerprint(
                 contrast = ((p75 - p10) / span).coerceIn(0f, 2f),
                 // Roll-off: how much less the top decile climbs than the middle does.
                 shoulderRoll = (1f - ((p99 - p90) / max(p90 - p50, 1e-3f))).coerceIn(-2f, 2f),
+                neutralWarmth = neutralWarm,
+                neutralGreen = neutralGreenLean,
+                neutralsFound = foundNeutrals,
                 shadowWarmth = cast(dr, db, dn),
                 shadowGreen = cast(dg, (dr + db) / 2f, dn),
                 highlightWarmth = cast(hr, hb, hn),
