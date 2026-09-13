@@ -147,6 +147,7 @@ data class Texture(
             // the measurement collapses. Verified against synthetic images — with this, a red
             // close bleed reads as halation and a wide neutral lift reads as bloom, and neither
             // is mistaken for the other.
+            val frameMean = lum.average()
             val sorted = lum.copyOf(); sorted.sort()
             val maxLum = sorted[n - 1]
             val bright = max(sorted[((n - 1) * 0.992f).toInt().coerceIn(0, n - 1)], 0.62f * maxLum)
@@ -167,7 +168,6 @@ data class Texture(
                     if (near4[i] && !isBright[i]) { nearR += r[i].toDouble(); nearB += b[i].toDouble(); nearL += lum[i].toDouble(); nearN++ }
                     if (far16[i] && !far10[i]) { farL += lum[i].toDouble(); farN++ }
                 }
-                val frameMean = lum.average()
                 val frameRed = r.average() - b.average()
                 val nearRed = if (nearN == 0) 0.0 else (nearR - nearB) / nearN
                 val nearLift = if (nearN == 0) 0.0 else nearL / nearN - frameMean
@@ -179,7 +179,7 @@ data class Texture(
 
             // --- glare: the black point rising in a bright frame ---
             val black = percentile(lum, 0.005f)
-            val glare = (black * frameMeanL.toFloat() * 12f).coerceIn(0f, 3f)
+            val glare = (black * frameMean.toFloat() * 12f).coerceIn(0f, 3f)
 
             return Texture(
                 grainAmount = 0f,        // filled in by measureGrain, at full resolution

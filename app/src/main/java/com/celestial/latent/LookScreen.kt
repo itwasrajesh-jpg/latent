@@ -79,12 +79,14 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
      */
     fun grainCropOf(uri: Uri): Bitmap? = runCatching {
         context.contentResolver.openInputStream(uri)?.use { input ->
-            val decoder = android.graphics.BitmapRegionDecoder.newInstance(input, false)
+            // newInstance can return null for a file it cannot open in regions.
+            val decoder = android.graphics.BitmapRegionDecoder.newInstance(input, false) ?: return@use null
             val side = minOf(decoder.width, decoder.height, 512)
             val left = (decoder.width - side) / 2
             val top = (decoder.height - side) / 2
-            decoder.decodeRegion(android.graphics.Rect(left, top, left + side, top + side), null)
-                .also { decoder.recycle() }
+            val crop = decoder.decodeRegion(android.graphics.Rect(left, top, left + side, top + side), null)
+            decoder.recycle()
+            crop
         }
     }.getOrNull()
 
