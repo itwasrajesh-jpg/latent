@@ -136,7 +136,7 @@ fun CameraScreen(
                 }.getOrNull().orEmpty()
                 if (name.endsWith(".dng", true)) lastRawUri = uri
                 if (settings.autoDevelop && name.endsWith(".dng", true) && !name.contains("BURST") && !name.contains("STACK")) {
-                    DevelopQueue.submit(context, DevelopQueue.Job(uri, com.celestial.latent.develop.Recipes.current(context).copy(film = settings.film), isRaw = true))
+                    DevelopQueue.submit(context, DevelopQueue.Job(uri, com.celestial.latent.develop.Recipes.current(context), isRaw = true))
                 }
             },
         )
@@ -191,12 +191,12 @@ fun CameraScreen(
     LaunchedEffect(settings.antibanding) { controller.setAntibanding(settings.antibanding) }
     // The film look for the viewfinder: baked off the main thread, and the previous one stays
     // on screen while the new one is prepared, so the preview never flashes.
-    LaunchedEffect(settings.film, settings.filmPreview, glPreview) {
+    LaunchedEffect(settings.preset, settings.film, settings.filmPreview, glPreview) {
         val view = glPreview
         if (!settings.filmPreview || view == null) return@LaunchedEffect
         baking = true
         withContext(Dispatchers.Default) {
-            val recipe = com.celestial.latent.develop.Recipes.current(context).copy(film = settings.film)
+            val recipe = com.celestial.latent.develop.Recipes.current(context)
             val look = com.celestial.latent.develop.LookBaker.bake(context, recipe)
             if (look != null) {
                 view.setExposureGain(look.gain)
@@ -332,7 +332,8 @@ fun CameraScreen(
                 Text(if (settings.saveJpeg) "RAW + JPG · 12.5M" else "RAW · 12.5M", color = LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp)
                 // Says plainly what the live image is and is not, without crowding the frame.
                 if (settings.filmPreview) Text(
-                    (Develop.FILMS.firstOrNull { it.first == settings.film }?.second ?: "FILM").uppercase() +
+                    (com.celestial.latent.develop.Presets.byId(context, settings.preset)?.name?.substringBefore(" — ")
+                        ?: Develop.FILMS.firstOrNull { it.first == settings.film }?.second ?: "FILM").uppercase() +
                         when {
                             baking -> " · PREPARING"
                             lookReady -> " · COLOUR ONLY"
@@ -371,12 +372,16 @@ fun CameraScreen(
                     modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(if (zoomOn) LatentColors.Amber else Color.Transparent).border(0.5.dp, LatentColors.Amber, RoundedCornerShape(999.dp))
                         .combinedClickable(onClick = { Haptics.tick(context); push(controls.copy(zoom = if (zoomOn) 1f else 2f)) }).padding(horizontal = 9.dp, vertical = 3.dp))
             }
-            FilmStrip(settings.film, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
-                onLongPress = { lastRawUri?.let { u -> onOpenDarkroom(u, true) } }) { f ->
-                    onSettingsChange(settings.copy(film = f))
-                    // Keep the saved recipe paired with the film the camera is loaded with.
-                    com.celestial.latent.develop.Recipes.setCurrent(context,
-                        com.celestial.latent.develop.Develop.pairedWithFilm(com.celestial.latent.develop.Recipes.current(context).copy(film = f)))
+            FilmStrip(settings.preset, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
+                onLongPress = { lastRawUri?.let { u -> onOpenDarkroom(u, true) } }) { id ->
+                    val preset = com.celestial.latent.develop.Presets.byId(context, id)
+                    if (preset != null) {
+                        // A look is a whole recipe, not just a film: the per-stock grain and
+                        // halation it carries are most of what makes stocks differ.
+                        onSettingsChange(settings.copy(preset = id, film = preset.recipe.film))
+                        com.celestial.latent.develop.Recipes.setCurrent(context, preset.recipe)
+                        com.celestial.latent.develop.LookBaker.invalidate()
+                    }
                 }
             if (toast.isNotEmpty()) Text(toast, color = LatentColors.TextBright, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xCC161615)).padding(12.dp))
             // Quick-settings drawer over the lower part of the viewfinder.

@@ -46,17 +46,34 @@ data class Recipe(
     val halationProtectEv: Float = 4.0f,
     val halationBounces: Int = 3,
     val halationDecay: Float = 0.5f,
+    /** Per-layer scatter geometry, which the presets vary per stock. */
+    val scatterCoreUm: List<Float> = listOf(2.2f, 2.0f, 1.6f),
+    val scatterTailUm: List<Float> = listOf(9.3f, 9.7f, 9.1f),
+    val scatterTailWeight: List<Float> = listOf(0.78f, 0.65f, 0.67f),
+    val halationBoostRange: Float = 0.3f,
     // Grain, continued
     val grainMicroAmount: Float = 0.2f,
     val grainMicroScale: Float = 30f,
     val grainDyeCloudUm: Float = 1.0f,
     val grainSublayerCount: Int = 1,
+    /**
+     * Per-layer grain, which is most of why one stock looks different from another: without
+     * these the engine gives every film Portra 400's grain. Three values, one per colour layer.
+     */
+    val grainParticleScale: List<Float> = listOf(1f, 1f, 1f),
+    val grainParticleScaleLayers: List<Float> = listOf(1f, 1f, 1f),
+    val grainUniformity: List<Float> = listOf(0.98f, 0.98f, 0.99f),
+    val grainDensityMin: List<Float> = listOf(0f, 0f, 0f),
+    /** Some presets set a deliberate exposure instead of letting the engine level every shot. */
+    val autoExposure: Boolean = true,
     // DIR couplers (chemistry: saturation and edge contrast)
     val dir: Boolean = true,
     val dirAmount: Float = 1.0f,
     val dirSameLayer: Float = 1.0f,
     val dirInterLayer: Float = 1.0f,
     val dirDiffusionUm: Float = 20f,
+    val dirDiffusionTailUm: Float = 200f,
+    val dirDiffusionTailWeight: Float = 0.06f,
     // Camera
     /** Colour-noise cleanup before the film sees the image. -1 = choose from the shot's ISO. */
     val chromaDenoise: Float = -1f,
@@ -135,13 +152,16 @@ data class Recipe(
     val gpuPreview: Boolean = false,
     val previewMaxSize: Int = 900,   // the engine's own preview fast-path target
 ) {
+    private fun triple(v: List<Float>, fallback: Float) =
+        Triple(v.getOrElse(0) { fallback }, v.getOrElse(1) { fallback }, v.getOrElse(2) { fallback })
+
     /** Build the engine's parameter tree from this recipe. */
     fun toParams(): SpektraParams = SpektraParams(
         filmProfile = film,
         printProfile = paper,
         camera = CameraParams(
             exposureCompensationEv = exposureEv,
-            autoExposure = true,
+            autoExposure = autoExposure,
             autoExposureMethod = meteringMethod,
             lensBlurUm = lensBlurUm,
             filmFormatMm = filmFormatMm,
@@ -160,12 +180,19 @@ data class Recipe(
             grain = GrainParams(
                 active = grain, sublayersActive = grainSublayers, agxParticleAreaUm2 = grainSizeUm2, blur = grainBlur,
                 blurDyeCloudsUm = grainDyeCloudUm, microStructure = grainMicroAmount to grainMicroScale, nSubLayers = grainSublayerCount,
+                agxParticleScale = triple(grainParticleScale, 1f),
+                agxParticleScaleLayers = triple(grainParticleScaleLayers, 1f),
+                uniformity = triple(grainUniformity, 0.98f),
+                densityMin = triple(grainDensityMin, 0f),
             ),
             halation = HalationParams(active = halation, halationAmount = halationAmount, halationSpatialScale = halationScale,
                 scatterAmount = scatterAmount, boostEv = halationBoostEv, protectEv = halationProtectEv,
-                halationNBounces = halationBounces, halationBounceDecay = halationDecay),
+                halationNBounces = halationBounces, halationBounceDecay = halationDecay,
+                scatterCoreUm = triple(scatterCoreUm, 2f), scatterTailUm = triple(scatterTailUm, 9f),
+                scatterTailWeight = triple(scatterTailWeight, 0.7f), boostRange = halationBoostRange),
             dirCouplers = DirCouplersParams(active = dir, amount = dirAmount, inhibitionSamelayer = dirSameLayer,
-                inhibitionInterlayer = dirInterLayer, diffusionSizeUm = dirDiffusionUm),
+                inhibitionInterlayer = dirInterLayer, diffusionSizeUm = dirDiffusionUm,
+                diffusionTailUm = dirDiffusionTailUm, diffusionTailWeight = dirDiffusionTailWeight),
             glare = GlareParams(active = glare, percent = glarePercent, roughness = glareRoughness, blur = glareBlur),
         ),
         enlarger = EnlargerParams(
@@ -207,8 +234,18 @@ data class Recipe(
         put("grain", grain); put("grainSizeUm2", grainSizeUm2.toDouble()); put("grainBlur", grainBlur.toDouble()); put("grainSublayers", grainSublayers)
         put("grainMicroAmount", grainMicroAmount.toDouble()); put("grainMicroScale", grainMicroScale.toDouble())
         put("grainDyeCloudUm", grainDyeCloudUm.toDouble()); put("grainSublayerCount", grainSublayerCount)
+        put("grainParticleScale", org.json.JSONArray(grainParticleScale.map { it.toDouble() }))
+        put("grainParticleScaleLayers", org.json.JSONArray(grainParticleScaleLayers.map { it.toDouble() }))
+        put("grainUniformity", org.json.JSONArray(grainUniformity.map { it.toDouble() }))
+        put("grainDensityMin", org.json.JSONArray(grainDensityMin.map { it.toDouble() }))
+        put("autoExposure", autoExposure)
         put("dir", dir); put("dirAmount", dirAmount.toDouble()); put("dirSameLayer", dirSameLayer.toDouble())
         put("dirInterLayer", dirInterLayer.toDouble()); put("dirDiffusionUm", dirDiffusionUm.toDouble())
+        put("dirDiffusionTailUm", dirDiffusionTailUm.toDouble()); put("dirDiffusionTailWeight", dirDiffusionTailWeight.toDouble())
+        put("scatterCoreUm", org.json.JSONArray(scatterCoreUm.map { it.toDouble() }))
+        put("scatterTailUm", org.json.JSONArray(scatterTailUm.map { it.toDouble() }))
+        put("scatterTailWeight", org.json.JSONArray(scatterTailWeight.map { it.toDouble() }))
+        put("halationBoostRange", halationBoostRange.toDouble())
         put("chromaDenoise", chromaDenoise.toDouble())
         put("filterUvAmount", filterUvAmount.toDouble()); put("filterUvNm", filterUvNm.toDouble()); put("filterUvWidth", filterUvWidth.toDouble())
         put("filterIrAmount", filterIrAmount.toDouble()); put("filterIrNm", filterIrNm.toDouble()); put("filterIrWidth", filterIrWidth.toDouble())
@@ -237,6 +274,10 @@ data class Recipe(
         fun fromJson(s: String): Recipe = try {
             val o = JSONObject(s); val d = Recipe()
             fun f(k: String, v: Float) = o.optDouble(k, v.toDouble()).toFloat()
+            fun floats(obj: JSONObject, k: String, fallback: List<Float>): List<Float> {
+                val a = obj.optJSONArray(k) ?: return fallback
+                return (0 until a.length()).map { a.optDouble(it, 0.0).toFloat() }
+            }
             Recipe(
                 film = o.optString("film", d.film), paper = o.optString("paper", d.paper),
                 exposureEv = f("exposureEv", d.exposureEv), pushStops = f("pushStops", d.pushStops), filmContrast = f("filmContrast", d.filmContrast),
@@ -248,8 +289,19 @@ data class Recipe(
                 grainSublayers = o.optBoolean("grainSublayers", d.grainSublayers), grainMicroAmount = f("grainMicroAmount", d.grainMicroAmount),
                 grainMicroScale = f("grainMicroScale", d.grainMicroScale), grainDyeCloudUm = f("grainDyeCloudUm", d.grainDyeCloudUm),
                 grainSublayerCount = o.optInt("grainSublayerCount", d.grainSublayerCount),
+                grainParticleScale = floats(o, "grainParticleScale", d.grainParticleScale),
+                grainParticleScaleLayers = floats(o, "grainParticleScaleLayers", d.grainParticleScaleLayers),
+                grainUniformity = floats(o, "grainUniformity", d.grainUniformity),
+                grainDensityMin = floats(o, "grainDensityMin", d.grainDensityMin),
+                autoExposure = o.optBoolean("autoExposure", d.autoExposure),
                 dir = o.optBoolean("dir", d.dir), dirAmount = f("dirAmount", d.dirAmount), dirSameLayer = f("dirSameLayer", d.dirSameLayer),
                 dirInterLayer = f("dirInterLayer", d.dirInterLayer), dirDiffusionUm = f("dirDiffusionUm", d.dirDiffusionUm),
+                dirDiffusionTailUm = f("dirDiffusionTailUm", d.dirDiffusionTailUm),
+                dirDiffusionTailWeight = f("dirDiffusionTailWeight", d.dirDiffusionTailWeight),
+                scatterCoreUm = floats(o, "scatterCoreUm", d.scatterCoreUm),
+                scatterTailUm = floats(o, "scatterTailUm", d.scatterTailUm),
+                scatterTailWeight = floats(o, "scatterTailWeight", d.scatterTailWeight),
+                halationBoostRange = f("halationBoostRange", d.halationBoostRange),
                 chromaDenoise = f("chromaDenoise", d.chromaDenoise),
                 filterUvAmount = f("filterUvAmount", d.filterUvAmount), filterUvNm = f("filterUvNm", d.filterUvNm),
                 filterUvWidth = f("filterUvWidth", d.filterUvWidth),

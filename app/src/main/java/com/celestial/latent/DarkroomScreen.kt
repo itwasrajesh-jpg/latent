@@ -89,6 +89,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
     var fullRunning by remember { mutableStateOf(false) }
     var previewIsPartial by remember { mutableStateOf(false) }
     var gpuTest by remember { mutableStateOf("") }
+    var lookId by remember { mutableStateOf("") }
     var fullStarted by remember { mutableStateOf(0L) }
     var elapsed by remember { mutableStateOf(0) }
     var lastRenderMs by remember { mutableStateOf(0) }
@@ -246,13 +247,20 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                     }
                 }
             }
-            // Film chips: always reachable, whatever tab is open.
+            // The engine's authored looks: each one is a full starting recipe, including the
+            // per-stock grain and halation that make stocks differ.
+            val looks = remember { com.celestial.latent.develop.Presets.all(context) }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Develop.FILMS.forEach { (id, label) ->
-                    val on = id == recipe.film
-                    Text(label.uppercase(), color = if (on) LatentColors.AmberInk else LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp,
-                        modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (on) LatentColors.Amber else LatentColors.Surface)
-                            .combinedClickable(onClick = { Haptics.tick(context); set { Develop.pairedWithFilm(copy(film = id)) } }).padding(horizontal = 11.dp, vertical = 7.dp))
+                looks.forEach { preset ->
+                    val on = preset.id == lookId
+                    Column(
+                        Modifier.clip(RoundedCornerShape(6.dp)).background(if (on) LatentColors.Amber else LatentColors.Surface)
+                            .combinedClickable(onClick = { Haptics.tick(context); lookId = preset.id; recipe = preset.recipe })
+                            .padding(horizontal = 11.dp, vertical = 6.dp),
+                    ) {
+                        Text(preset.name.substringBefore(" — ").uppercase(), color = if (on) LatentColors.AmberInk else LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp)
+                        Text(preset.name.substringAfter(" — ", preset.group), color = if (on) LatentColors.AmberInk.copy(alpha = 0.7f) else LatentColors.Text, fontSize = 8.sp)
+                    }
                 }
             }
             // Tabs
@@ -269,6 +277,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp)) {
                 when (tab) {
                     "film" -> {
+                        com.celestial.latent.develop.Presets.byId(context, lookId)?.let { p -> Note(p.description) }
                         S("Exposure", recipe.exposureEv, -3f, 3f, "%+.1f EV") { set { copy(exposureEv = it) } }
                         S("Push / pull", recipe.pushStops, -2f, 3f, "%+.1f stop") { set { copy(pushStops = it) } }
                         S("Film contrast", recipe.filmContrast, 0.6f, 1.6f, "%.2f") { set { copy(filmContrast = it) } }

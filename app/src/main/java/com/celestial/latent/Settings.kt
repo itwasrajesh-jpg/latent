@@ -37,6 +37,7 @@ data class AppSettings(
     val burstMode: Boolean = false,         // tap = 16-frame burst (hold = single)
     val haptics: Boolean = true,
     val film: String = "kodak_portra_400",   // film used for the live preview and auto-develop
+    val preset: String = "portra400_endura_wedding",  // the authored look; carries per-stock grain etc.
     val autoDevelop: Boolean = true,         // develop single shots in the background (never bursts)
     val filmPreview: Boolean = true,         // draw the viewfinder ourselves so the film look can be shown
 ) {
@@ -68,6 +69,7 @@ data class AppSettings(
                 burstMode = p.getBoolean("burstMode", false),
                 haptics = p.getBoolean("haptics", true),
                 film = p.getString("film", "kodak_portra_400") ?: "kodak_portra_400",
+                preset = p.getString("preset", "portra400_endura_wedding") ?: "portra400_endura_wedding",
                 autoDevelop = p.getBoolean("autoDevelop", true),
                 filmPreview = p.getBoolean("filmPreview", true),
             )
@@ -92,6 +94,7 @@ data class AppSettings(
                 .putBoolean("burstMode", s.burstMode)
                 .putBoolean("haptics", s.haptics)
                 .putString("film", s.film)
+                .putString("preset", s.preset)
                 .putBoolean("autoDevelop", s.autoDevelop)
                 .putBoolean("filmPreview", s.filmPreview)
                 .apply()
