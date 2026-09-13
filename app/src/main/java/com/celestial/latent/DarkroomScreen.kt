@@ -57,7 +57,7 @@ import com.celestial.latent.ui.LatentColors
 import kotlinx.coroutines.delay
 
 private const val COARSE_EDGE = 420     // while a control is moving
-private const val FINE_EDGE = 800       // once it settles
+private const val FINE_EDGE = 640       // the size the engine's own editor uses
 private const val DECODE_EDGE = 1200    // the RAW is decoded once at this size for the darkroom
 
 private val TABS = listOf(

@@ -31,7 +31,10 @@ data class Recipe(
     val exposureEv: Float = 0f,
     val pushStops: Float = 0f,          // push/pull, applied as film density gamma
     val filmContrast: Float = 1.0f,     // film density curve gamma
-    // Halation
+    // Halation.
+    // Note: the engine defaults grain, halation, couplers and glare to OFF, because it is a
+    // library. Latent is a film camera, so they default ON — the authored looks turn them on
+    // anyway, and a photo with no grain is not what anyone opens this app for.
     val halation: Boolean = true,
     val halationAmount: Float = 1.0f,
     val halationScale: Float = 1.0f,
@@ -40,7 +43,7 @@ data class Recipe(
     // Grain
     val grain: Boolean = true,
     val grainSizeUm2: Float = 0.2f,
-    val grainBlur: Float = 0.65f,
+    val grainBlur: Float = 0.5f,      // the engine's own default
     val grainSublayers: Boolean = true,
     // Halation, continued
     val halationProtectEv: Float = 4.0f,
@@ -60,10 +63,12 @@ data class Recipe(
      * Per-layer grain, which is most of why one stock looks different from another: without
      * these the engine gives every film Portra 400's grain. Three values, one per colour layer.
      */
-    val grainParticleScale: List<Float> = listOf(1f, 1f, 1f),
-    val grainParticleScaleLayers: List<Float> = listOf(1f, 1f, 1f),
-    val grainUniformity: List<Float> = listOf(0.98f, 0.98f, 0.99f),
-    val grainDensityMin: List<Float> = listOf(0f, 0f, 0f),
+    // These match the engine's own defaults exactly: a recipe that does not set them must
+    // render identically to the engine's defaults, not to numbers of ours.
+    val grainParticleScale: List<Float> = listOf(0.8f, 1.0f, 2.0f),
+    val grainParticleScaleLayers: List<Float> = listOf(2.5f, 1.0f, 0.5f),
+    val grainUniformity: List<Float> = listOf(0.97f, 0.97f, 0.99f),
+    val grainDensityMin: List<Float> = listOf(0.07f, 0.08f, 0.12f),
     /** Some presets set a deliberate exposure instead of letting the engine level every shot. */
     val autoExposure: Boolean = true,
     // DIR couplers (chemistry: saturation and edge contrast)
@@ -150,7 +155,7 @@ data class Recipe(
     // GPU is preview-only by the engine's own rule: its float maths is not bit-reproducible
     // across vendors, so export and the parity path stay on the CPU.
     val gpuPreview: Boolean = false,
-    val previewMaxSize: Int = 900,   // the engine's own preview fast-path target
+    val previewMaxSize: Int = 640,   // the size the engine's own editor uses interactively
 ) {
     private fun triple(v: List<Float>, fallback: Float) =
         Triple(v.getOrElse(0) { fallback }, v.getOrElse(1) { fallback }, v.getOrElse(2) { fallback })
@@ -182,8 +187,8 @@ data class Recipe(
                 blurDyeCloudsUm = grainDyeCloudUm, microStructure = grainMicroAmount to grainMicroScale, nSubLayers = grainSublayerCount,
                 agxParticleScale = triple(grainParticleScale, 1f),
                 agxParticleScaleLayers = triple(grainParticleScaleLayers, 1f),
-                uniformity = triple(grainUniformity, 0.98f),
-                densityMin = triple(grainDensityMin, 0f),
+                uniformity = triple(grainUniformity, 0.97f),
+                densityMin = triple(grainDensityMin, 0.07f),
             ),
             halation = HalationParams(active = halation, halationAmount = halationAmount, halationSpatialScale = halationScale,
                 scatterAmount = scatterAmount, boostEv = halationBoostEv, protectEv = halationProtectEv,
