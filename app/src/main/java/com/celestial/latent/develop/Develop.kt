@@ -219,7 +219,8 @@ object Develop {
 
     fun render(context: Context, source: Source, recipe: Recipe, preview: Boolean, log: (String) -> Unit = {}): Pair<ByteArray, Pair<Int, Int>> {
         val t = System.nanoTime()
-        Log.i("Latent", "render start: source ${source.width}x${source.height}, preview=$preview, cap=${recipe.previewMaxSize}, film=${recipe.film}, gpuPreview=${preview && recipe.gpuPreview}")
+        Log.i("Latent", "render start: source ${source.width}x${source.height}, preview=$preview, cap=${recipe.previewMaxSize}")
+        Log.i("Latent", "recipe: " + sanitised(recipe).summary())
         var dims = 0 to 0
         // GPU is preview-only: a full render always goes through the CPU engine.
         val params = sanitised(if (preview) recipe else recipe.copy(gpuPreview = false)).toParams()

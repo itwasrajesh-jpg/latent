@@ -230,6 +230,12 @@ data class Recipe(
         ),
     )
 
+    /** A one-line summary of the settings that shape the look, for the log. */
+    fun summary(): String = "film=$film paper=$paper scanFilm=$scanFilm ev=$exposureEv autoExp=$autoExposure " +
+        "contrast=$filmContrast printExp=$printExposure printComp=$printExposureCompensation " +
+        "grain=$grain(${grainSizeUm2}, scale=$grainParticleScale) halation=$halation($halationAmount) " +
+        "dir=$dir($dirAmount) glare=$glare diffusion=$diffusion out=$outputColorSpace/$outputGamutCompress"
+
     fun toJson(): String = JSONObject().apply {
         put("film", film); put("paper", paper)
         put("exposureEv", exposureEv.toDouble()); put("pushStops", pushStops.toDouble()); put("filmContrast", filmContrast.toDouble())
