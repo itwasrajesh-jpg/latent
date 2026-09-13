@@ -37,11 +37,34 @@ object Emulsion {
         val spectralShift: FloatArray = floatArrayOf(0f, 0f, 0f),
         /** How sensitive each layer is overall, in stops. */
         val speed: FloatArray = floatArrayOf(0f, 0f, 0f),
+        /**
+         * How the print is made. These are not properties of the emulsion, but they decide the
+         * colour balance of the result: the enlarger's yellow and magenta filters are how a
+         * darkroom sets white balance, and no amount of moving the film's curves can stand in
+         * for them. Leaving them fixed was why the colour never came right.
+         */
+        val yFilter: Float = 0f,
+        val mFilter: Float = 0f,
+        val printExposure: Float = 1f,
+        val printContrast: Float = 1f,
     ) {
-        fun asArray() = centre + height + width + spectralShift + speed
+        fun asArray() = centre + height + width + spectralShift + speed +
+            floatArrayOf(yFilter, mFilter, printExposure, printContrast)
+
+        /**
+         * Carries the print settings into a recipe. The emulsion lives in the profile, but how
+         * it is printed lives here — so a saved stock must take these with it, or it will not
+         * look like what the search arrived at.
+         */
+        fun applyPrintTo(r: Recipe): Recipe = r.copy(
+            yFilterShift = yFilter,
+            mFilterShift = mFilter,
+            printExposure = printExposure,
+            printContrast = printContrast,
+        )
 
         companion object {
-            const val COUNT = 15
+            const val COUNT = 19
 
             fun from(v: FloatArray) = Shape(
                 centre = floatArrayOf(v[0], v[1], v[2]),
@@ -49,6 +72,9 @@ object Emulsion {
                 width = floatArrayOf(v[6], v[7], v[8]),
                 spectralShift = floatArrayOf(v[9], v[10], v[11]),
                 speed = floatArrayOf(v[12], v[13], v[14]),
+                yFilter = v[15].coerceIn(-20f, 20f), mFilter = v[16].coerceIn(-20f, 20f),
+                printExposure = v[17].coerceIn(0.4f, 2.2f),
+                printContrast = v[18].coerceIn(0.6f, 1.6f),
             )
 
             /** How far each number is allowed to move in one step of the search. */
@@ -58,6 +84,11 @@ object Emulsion {
                 0.06f, 0.06f, 0.06f,      // width
                 6f, 6f, 6f,               // spectral shift, nm
                 0.10f, 0.10f, 0.10f,      // speed, stops
+                0.8f, 0.8f,               // enlarger filters — the white balance. The engine's own
+                                          // presets use shifts of one or two, so the steps are
+                                          // small: a jump of six would swing the balance wildly
+                                          // and almost every attempt would be thrown away.
+                0.05f, 0.04f,             // print exposure and paper contrast
             )
         }
     }

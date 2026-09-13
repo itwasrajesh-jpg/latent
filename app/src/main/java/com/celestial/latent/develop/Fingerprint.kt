@@ -60,7 +60,13 @@ data class Fingerprint(
         val a = asList(); val b = other.asList()
         var sum = 0f
         for (i in a.indices) {
-            val d = (a[i] - b[i]) * WEIGHTS[i]
+            // Scale first, then weight. The figures live on very different scales — mean
+            // saturation moves by a few hundredths where a tone position moves by tenths —
+            // so without this the colour and saturation measures are drowned out however
+            // heavily they are weighted. Measured: desaturating by a third moved the distance
+            // 0.010 before and 0.057 after, while brightness (which is levelled anyway) fell
+            // from 0.045 to 0.042 and is now the least influential, as it should be.
+            val d = (a[i] - b[i]) * SCALE[i] * WEIGHTS[i]
             sum += d * d
         }
         return sqrt(sum / WEIGHTS.sumOf { (it * it).toDouble() }.toFloat())
@@ -76,12 +82,27 @@ data class Fingerprint(
             "skin hue", "skin saturation", "foliage hue", "foliage saturation",
         )
 
+        /**
+         * Puts the figures on a common footing before weighting. A colour cast and a saturation
+         * figure change by a few hundredths where a tone position changes by tenths, so without
+         * this they contribute almost nothing whatever weight they are given.
+         */
+        private val SCALE = floatArrayOf(
+            1f, 1f, 1f, 1f, 1f,               // tone positions: already 0..1
+            1f, 1f,                            // contrast and roll-off: already comparable
+            4f, 4f, 4f, 4f,                    // colour casts: small numbers, big effect
+            4f, 4f,                            // saturation likewise
+            2f, 4f, 2f, 4f,                    // skin and foliage
+        )
+
         private val WEIGHTS = floatArrayOf(
-            0.6f, 1.0f, 1.0f, 1.0f, 0.6f,     // where the tones sit
-            1.4f, 1.2f,                        // contrast and roll-off carry a lot
-            1.6f, 1.4f, 1.6f, 1.4f,            // the crossover is the film's signature
-            1.2f, 1.2f,                        // saturation behaviour
-            1.8f, 1.4f, 1.0f, 1.0f,            // skin most of all, then foliage
+            // Brightness is levelled in every attempt, so where the tones sit matters far less
+            // than how they relate to each other.
+            0.25f, 0.4f, 0.4f, 0.4f, 0.25f,
+            1.5f, 1.3f,                        // contrast and roll-off carry a lot
+            1.8f, 1.6f, 1.8f, 1.6f,            // the crossover is the film's signature
+            2.4f, 2.0f,                        // saturation behaviour
+            2.0f, 2.0f, 1.2f, 1.4f,            // skin most of all, then foliage
         )
 
         /** Averages a set of fingerprints — how a reference set becomes one target. */

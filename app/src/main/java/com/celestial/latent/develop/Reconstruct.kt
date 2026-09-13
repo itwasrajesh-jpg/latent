@@ -75,6 +75,11 @@ object Reconstruct {
                     // A negative must be printed; a slide film has no print stage and is scanned.
                     paper = paper ?: Develop.DEFAULT_PAPER,
                     scanFilm = paper == null,
+                    // The print is where colour balance is set, so the search moves it too.
+                    yFilterShift = shape.yFilter,
+                    mFilterShift = shape.mFilter,
+                    printExposure = shape.printExposure,
+                    printContrast = shape.printContrast,
                     grain = false, halation = false, glare = false, diffusion = false,
                     previewMaxSize = 320,
                     autoExposure = true,      // each attempt is levelled, so brightness is not what is matched
@@ -108,7 +113,10 @@ object Reconstruct {
         while (tried < rounds && !cancelled) {
             // One number at a time, by a step that shrinks as the search settles.
             val v = current.asArray().copyOf()
-            val which = random.nextInt(Emulsion.Shape.COUNT)
+            // The print controls set the colour balance and were fixed until now, so they are
+            // tried more often early on, when there is most to gain from them.
+            val which = if (tried < rounds / 3 && random.nextInt(100) < 45) 15 + random.nextInt(4)
+            else random.nextInt(Emulsion.Shape.COUNT)
             val step = Emulsion.Shape.STEP[which] * temperature
             v[which] += if (random.nextBoolean()) step else -step
             val candidate = Emulsion.Shape.from(v)
@@ -139,8 +147,15 @@ object Reconstruct {
         return best
     }
 
+    /**
+     * A readable score. The distance is no longer bounded at one — the figures are now scaled
+     * so the measure discriminates properly — so subtracting it from 100 would peg anything
+     * genuinely different at zero and hide the search's progress. This eases off instead, and
+     * never quite reaches either end.
+     */
     fun percent(distance: Float?): String =
-        if (distance == null) "—" else "${((1f - distance) * 100).toInt().coerceIn(0, 100)}%"
+        if (distance == null) "—"
+        else "${(100.0 * Math.exp(-1.2 * distance)).toInt().coerceIn(0, 99)}%"
 
     /** Saves the working emulsion under a name of the user's choosing. */
     fun save(context: Context, shape: Emulsion.Shape, baseStock: String, name: String): String? {

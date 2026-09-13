@@ -212,7 +212,10 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
         Text(
             if (references.isEmpty()) "images in the look you want — a dozen is plenty"
             else "${references.size} images · they disagree by ${"%.2f".format(spread)}" +
-                (if (spread > 0.25f) " — quite a scattered set" else ""),
+                // The distance scale changed when the figures were put on a common footing, so this
+                // threshold moved with it: a set of different scenes sharing one look sits well
+                // below this, while a set with no look in common goes above it.
+                (if (spread > 0.9f) " — quite a scattered set" else ""),
             color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.padding(bottom = 18.dp),
         )
 
@@ -299,6 +302,8 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
                 "density built" to s.height,
                 "how gradually" to s.width,
                 "spectral shift (nm)" to s.spectralShift,
+                "print balance (Y M)" to floatArrayOf(s.yFilter, s.mFilter),
+                "print exposure, contrast" to floatArrayOf(s.printExposure, s.printContrast),
             ).forEach { (label, v) ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(label, color = LatentColors.TextDim, fontSize = 11.sp)
@@ -320,7 +325,9 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
                     saved = if (id == null) "could not save" else {
                         // The stock carries what was read from the references: its own grain,
                         // halation, bloom and glare, not the defaults.
-                        var recipe = com.celestial.latent.develop.Recipe(film = id)
+                        // The emulsion is in the profile; how it is printed is in the recipe.
+                        // Both are needed, or the saved stock will not match what was built.
+                        var recipe = best.shape.applyPrintTo(com.celestial.latent.develop.Recipe(film = id))
                         texture?.let { recipe = it.applyTo(recipe) }
                         com.celestial.latent.develop.Recipes.save(context, name, recipe)
                         "saved as $name — it is in the film strip"
