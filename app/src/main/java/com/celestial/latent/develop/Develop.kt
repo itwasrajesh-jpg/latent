@@ -236,14 +236,16 @@ object Develop {
     fun fastDiffusionSource(source: Source, recipe: Recipe, log: (String) -> Unit = {}) {
         if (!(recipe.fastDiffusion && recipe.diffusion)) return
         if (source.diffused) return
-        log("diffusion (Latent's fast version)")
+        log("diffusion filter")
         val longest = maxOf(source.width, source.height)
         val pixelSizeUm = recipe.filmFormatMm * 1000f / longest
-        FastDiffusion.apply(
+        FilmDiffusion.apply(
             source.image.data, source.width, source.height,
             recipe.diffusionFamily, recipe.diffusionStrength, recipe.diffusionScale,
-            recipe.diffusionCore, recipe.diffusionHalo, recipe.diffusionBloom, recipe.diffusionWarmth,
-            pixelSizeUm,
+            recipe.diffusionCore, recipe.diffusionCoreSize,
+            recipe.diffusionHalo, recipe.diffusionHaloSize,
+            recipe.diffusionBloom, recipe.diffusionBloomSize,
+            recipe.diffusionWarmth, pixelSizeUm,
         )
         source.diffused = true
     }

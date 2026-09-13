@@ -278,7 +278,26 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                 when (tab) {
                     "film" -> {
                         com.celestial.latent.develop.Presets.byId(context, lookId)?.let { p -> Note(p.description) }
-                        S("Exposure", recipe.exposureEv, -3f, 3f, "%+.1f EV") { set { copy(exposureEv = it) } }
+                        // Brightness, meaning what you expect it to mean.
+                        //
+                        // On the print route the enlarger recomputes its exposure from the film
+                        // exposure — a printer compensating, which is faithful but means the film
+                        // exposure changes contrast and colour, not brightness. So brightness is
+                        // the print exposure here, and the film exposure lives in Full mode where
+                        // it is labelled for what it does. Slide films have no print stage, so
+                        // there the film exposure is the brightness.
+                        val onPrintRoute = !recipe.scanFilm && !Develop.isSlideFilm(recipe.film)
+                        if (onPrintRoute) {
+                            // Print exposure is the light reaching the paper, and paper darkens
+                            // with light — longer exposure, darker print, exactly as in a
+                            // darkroom. So the slider shows brightness and inverts it, or
+                            // dragging right would make the picture darker.
+                            S("Brightness", 1f / recipe.printExposure.coerceAtLeast(0.01f), 0.45f, 2.5f, "%.2f×") {
+                                set { copy(printExposure = (1f / it).coerceIn(0.4f, 2.2f)) }
+                            }
+                        } else {
+                            S("Brightness", recipe.exposureEv, -3f, 3f, "%+.1f EV") { set { copy(exposureEv = it) } }
+                        }
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             // The photo opens at the brightness it was shot at. This asks the film
                             // what it would have chosen — a starting point, not a correction.
@@ -292,11 +311,14 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                                                 val s0 = src
                                                 val suggested = if (s0 != null) com.celestial.latent.develop.LookBaker.gainForSource(context, recipe, s0) else 0f
                                                 if (suggested > 0.01f) {
-                                                    // A gain becomes an exposure offset in stops. Only the
-                                                    // difference is applied, against whatever the recipe is
-                                                    // when it lands — a slider moved meanwhile is not lost.
                                                     val ev = (Math.log(suggested.toDouble()) / Math.log(2.0)).toFloat()
-                                                    recipe = recipe.copy(exposureEv = (recipe.exposureEv + ev).coerceIn(-3f, 3f))
+                                                    // Applied where brightness actually lives on this route.
+                                                    recipe = if (onPrintRoute)
+                                                        // "Needs more light" means a brighter print,
+                                                        // which means a SHORTER enlarger exposure.
+                                                        recipe.copy(printExposure = (recipe.printExposure / suggested).coerceIn(0.4f, 2.2f))
+                                                    else
+                                                        recipe.copy(exposureEv = (recipe.exposureEv + ev).coerceIn(-3f, 3f))
                                                 }
                                                 } finally { levelling = false }
                                             }.start()
@@ -304,12 +326,22 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                                     }).padding(horizontal = 12.dp, vertical = 7.dp))
                             Text("Reset to shot", color = LatentColors.Text, fontSize = 11.sp,
                                 modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Surface)
-                                    .combinedClickable(onClick = { Haptics.tick(context); recipe = recipe.copy(exposureEv = 0f) })
-                                    .padding(horizontal = 12.dp, vertical = 7.dp))
+                                    .combinedClickable(onClick = {
+                                        Haptics.tick(context)
+                                        recipe = if (onPrintRoute) recipe.copy(printExposure = 1f) else recipe.copy(exposureEv = 0f)
+                                    }).padding(horizontal = 12.dp, vertical = 7.dp))
                         }
-                        Note("The photo opens at the brightness you shot it. Auto level asks the film what it would have chosen; the slider is yours either way.")
+                        Note(if (onPrintRoute)
+                            "Brightness sets how long the print is exposed under the enlarger — the darkroom's own way of controlling it. (In the ENLARGER tab the same control appears as print exposure, which runs the other way: more light on the paper means a darker print.) Film exposure is in Full mode: with the print compensating, it shapes contrast and colour rather than brightness."
+                        else
+                            "This film is scanned directly, with no print stage, so brightness is the film exposure itself.")
                         S("Push / pull", recipe.pushStops, -2f, 3f, "%+.1f stop") { set { copy(pushStops = it) } }
                         S("Film contrast", recipe.filmContrast, 0.6f, 1.6f, "%.2f") { set { copy(filmContrast = it) } }
+                        if (full) {
+                            S("Film exposure (contrast & colour)", recipe.exposureEv, -3f, 3f, "%+.1f EV") { set { copy(exposureEv = it) } }
+                            Toggle("Let the print compensate", recipe.printExposureCompensation) { set { copy(printExposureCompensation = it) } }
+                            Note("Turn this off and film exposure changes brightness directly, as it would if you printed every negative for the same time.")
+                        }
                         Head("COLOUR NOISE", null) {}
                         val auto = recipe.chromaDenoise < 0f
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -348,11 +380,11 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                     }
                     "diffusion" -> {
                         Head("LENS FILTER", recipe.diffusion) { set { copy(diffusion = it) } }
-                        Toggle("Latent's fast version", recipe.fastDiffusion) { set { copy(fastDiffusion = it) } }
+                        Toggle("Fast diffusion", recipe.fastDiffusion) { set { copy(fastDiffusion = it) } }
                         Note(if (recipe.fastDiffusion)
-                            "Seconds instead of minutes, and about 13–21% different from the engine's filter — close in character, not a match. Turn off for the exact one."
+                            "The same filter, computed with an FFT instead of pixel by pixel: seconds rather than minutes. The kernel is the engine's own; the widest, softest part of the glow is worked out on a quarter-size copy, which measures 0.5% away from the exact result — below one step of a JPEG."
                         else
-                            "The engine's exact filter. Faithful, but the slowest stage by far: minutes at full size.")
+                            "The engine's own filter, computed directly. Identical by definition, and the slowest stage by far: minutes at full size.")
                         Chips(DIFFUSION_FAMILIES, recipe.diffusionFamily) { set { copy(diffusionFamily = it) } }
                         S("Strength", recipe.diffusionStrength, 0f, 1f, "%.2f", recipe.diffusion) { set { copy(diffusionStrength = it) } }
                         S("Spatial scale", recipe.diffusionScale, 0.2f, 3f, "%.2f", recipe.diffusion) { set { copy(diffusionScale = it) } }
@@ -404,7 +436,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                         Toggle("Compensate for film exposure", recipe.printExposureCompensation) { set { copy(printExposureCompensation = it) } }
                         Toggle("Normalise print exposure", recipe.normalizePrintExposure) { set { copy(normalizePrintExposure = it) } }
                         Note("With these on — as a darkroom printer would work — the enlarger cancels out changes in film exposure, so the Exposure slider changes contrast and colour rather than brightness. Turn the first off to let film exposure change brightness directly.")
-                        S("Print exposure", recipe.printExposure, 0.4f, 2.2f, "%.2f") { set { copy(printExposure = it) } }
+                        S("Print exposure (higher = darker print)", recipe.printExposure, 0.4f, 2.2f, "%.2f×") { set { copy(printExposure = it) } }
                         S("Paper contrast", recipe.printContrast, 0.6f, 1.6f, "%.2f") { set { copy(printContrast = it) } }
                         S("Yellow filter", recipe.yFilterShift, -20f, 20f, "%+.0f") { set { copy(yFilterShift = it) } }
                         S("Magenta filter", recipe.mFilterShift, -20f, 20f, "%+.0f") { set { copy(mFilterShift = it) } }

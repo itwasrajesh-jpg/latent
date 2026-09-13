@@ -60,6 +60,10 @@ dependencies {
     implementation(project(":engine:spektra-core"))
     implementation(project(":lib:libraw"))
 
+    // JTransforms (BSD): the FFT behind Latent's diffusion filter, so a kernel hundreds of
+    // pixels wide costs the same as a small one. Pure Java — no extra native build.
+    implementation("com.github.wendykierp:JTransforms:3.1")
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
