@@ -400,6 +400,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                         S("Bloom size", recipe.diffusionBloomSize, 0.2f, 3f, "%.2f", recipe.diffusion) { set { copy(diffusionBloomSize = it) } }
                         S("Halo warmth", recipe.diffusionWarmth, -1f, 1f, "%+.2f", recipe.diffusion) { set { copy(diffusionWarmth = it) } }
                         Head("ENLARGER FILTER", recipe.printDiffusion) { set { copy(printDiffusion = it) } }
+                        Note("A diffusion filter under the enlarger rather than on the lens. It blooms the negative, so the softening comes out of the print's shadows instead of glowing around its highlights — quieter, and it takes contrast out of the dark end. Emulated before the engine while fast diffusion is on, which makes it stronger for a given strength than the engine's own: start around 0.2. Turn fast diffusion off for the engine's exact version, at minutes per photo.")
                         Chips(DIFFUSION_FAMILIES, recipe.printDiffusionFamily) { set { copy(printDiffusionFamily = it, printDiffusion = true) } }
                         S("Strength", recipe.printDiffusionStrength, 0f, 1f, "%.2f", recipe.printDiffusion) { set { copy(printDiffusionStrength = it) } }
                     }

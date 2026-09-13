@@ -28,6 +28,7 @@ object Develop {
         /** Colour noise is cleaned once per decode, not once per render. */
         @Volatile var denoised = false
         @Volatile var diffused = false
+        @Volatile var printDiffused = false
 
         /** Refills this image from [from], so one working buffer can be reused. */
         fun refillFrom(from: Source) {
@@ -38,6 +39,7 @@ object Develop {
             src.rewind(); dst.rewind()
             denoised = false
             diffused = false
+            printDiffused = false
         }
 
         /** An empty copy of the same shape, to be refilled. */
@@ -136,6 +138,7 @@ object Develop {
         working.refillFrom(pristine)
         denoiseSource(working, recipe, iso, log)
         fastDiffusionSource(working, recipe, preview = true, log = log)
+        fastPrintDiffusionSource(working, recipe, preview = true, log = log)
         return working
     }
 
@@ -256,6 +259,44 @@ object Develop {
      * Latent's own diffusion, applied before the film stage when chosen. The engine works in
      * film dimensions, so the blur is scaled by how much of the negative one pixel covers.
      */
+    /**
+     * The enlarger's diffusion filter, computed fast.
+     *
+     * The engine applies it inside the print stage, where nothing outside can reach. But that
+     * stage blooms the NEGATIVE, and a negative is the image in density — the inverse of light.
+     * So the same filter applied to the density form of the image, before the engine, spreads
+     * light from the same places: out of what will become the print's shadows rather than its
+     * highlights, which is the softer, lifted look the enlarger filter gives.
+     *
+     * This is an emulation of where the stage sits, not a replica of it. The alternative is the
+     * engine's own, which is faithful and takes minutes at full size.
+     */
+    fun fastPrintDiffusionSource(source: Source, recipe: Recipe, preview: Boolean = false, log: (String) -> Unit = {}) {
+        if (!((recipe.fastDiffusion || preview) && recipe.printDiffusion)) return
+        if (source.printDiffused) return
+        log("enlarger filter (in density)")
+        val buf = source.image.data.order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer()
+        val n = source.width * source.height * 3
+
+        // Into density: d = -log10(light). Bounded so pure black cannot become infinite.
+        for (i in 0 until n) {
+            val v = buf.get(i).coerceAtLeast(1e-5f)
+            buf.put(i, (-Math.log10(v.toDouble())).toFloat().coerceIn(-1f, 5f))
+        }
+        val longest = maxOf(source.width, source.height)
+        FilmDiffusion.apply(
+            source.image.data, source.width, source.height,
+            recipe.printDiffusionFamily, recipe.printDiffusionStrength, recipe.diffusionScale,
+            1f, 1f, 1f, 1f, 1f, 1f, 0f,
+            recipe.filmFormatMm * 1000f / longest,
+        )
+        // And back to light.
+        for (i in 0 until n) {
+            buf.put(i, Math.pow(10.0, -buf.get(i).toDouble()).toFloat().coerceIn(0f, 1e5f))
+        }
+        source.printDiffused = true
+    }
+
     fun fastDiffusionSource(source: Source, recipe: Recipe, preview: Boolean = false, log: (String) -> Unit = {}) {
         // Previews always take the fast path; only the export honours the setting.
         if (!((recipe.fastDiffusion || preview) && recipe.diffusion)) return
@@ -285,6 +326,7 @@ object Develop {
             // off — but the enlarger's is a different stage, later in the chain, and is left to
             // the engine. Switching both off was dropping half the glow.
             .let { if (it.diffusion && (it.fastDiffusion || preview)) it.copy(diffusion = false) else it }
+            .let { if (it.printDiffusion && (it.fastDiffusion || preview)) it.copy(printDiffusion = false) else it }
         // Our own spaces are built from the engine's sRGB output, so ask it for sRGB.
         val ourSpace = if (OutputSpace.isOurs(base.outputColorSpace)) base.outputColorSpace else ""
         val params = (if (ourSpace.isEmpty()) base else base.copy(outputColorSpace = OutputSpace.ENGINE_SRGB)).toParams()
@@ -509,6 +551,7 @@ object Develop {
         return src.use { s ->
             denoiseSource(s, recipe, isoOf(context, source), log)
             fastDiffusionSource(s, recipe, preview = false, log = log)
+            fastPrintDiffusionSource(s, recipe, preview = false, log = log)
             log("developing ${s.width}×${s.height}…")
             val (bytes, dims) = render(context, s, recipe, preview = false, log = log)
             log("saving ${dims.first}×${dims.second}, ${bytes.size / 1024} KB")
