@@ -11,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -69,6 +70,8 @@ private fun Root() {
     var darkroomIsRaw by remember { mutableStateOf(true) }
     var crash by remember { mutableStateOf(CrashLog.read(context)) }
     var screen by remember { mutableStateOf("camera") }
+    // Shown once per launch, over the camera, which opens behind it.
+    var opening by remember { mutableStateOf(settings.openingAnimation) }
     crash?.let { text ->
         Column(Modifier.fillMaxSize().background(LatentColors.Background).statusBarsPadding().navigationBarsPadding().padding(16.dp)) {
             Text("Latent crashed last time", color = LatentColors.TextBright, fontSize = 18.sp)
@@ -108,7 +111,9 @@ private fun Root() {
         screen = when (screen) { "settings", "extension", "roll" -> "camera"; "darkroom" -> "roll"; else -> "settings" }
     }
 
-    when (screen) {
+    // The overlay is drawn after the screens, so it covers them while the camera starts behind.
+    Box(Modifier.fillMaxSize()) {
+        when (screen) {
         "report" -> ReportScreen(onBack = { screen = "settings" })
         "settings" -> SettingsScreen(
             settings = settings,
@@ -163,6 +168,9 @@ private fun Root() {
             onController = { c -> controllerRef = c },
             onVendorEcho = { e -> vendorEcho = e },
         )
+    }
+
+        if (opening) LaunchOverlay(onDone = { opening = false })
     }
 }
 

@@ -339,7 +339,9 @@ fun ExtensionScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Un
             var baseZoom by remember { mutableStateOf(1f) }
             var x2 by remember { mutableStateOf(false) }
             fun send() { zoom = baseZoom * (if (x2) 2f else 1f); cam.applyZoom(zoom) }
-            if (zoomOk) Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 46.dp), verticalAlignment = Alignment.CenterVertically) {
+            // The look strip is two lines tall, so the lens row sits well clear of it —
+            // the same spacing as the camera screen.
+            if (zoomOk) Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 84.dp), verticalAlignment = Alignment.CenterVertically) {
                 listOf(0.6f to "0.6", 1f to "1", 3f to "3", 4.3f to "4.3").forEach { (z, label) ->
                     val on = baseZoom == z
                     Text(if (on) "$label×" else label, color = if (on) LatentColors.TextBright else LatentColors.Text, fontSize = if (on) 15.sp else 12.sp,
@@ -354,7 +356,7 @@ fun ExtensionScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Un
                     modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(999.dp)).background(if (iszOn) LatentColors.Amber else androidx.compose.ui.graphics.Color.Transparent).border(0.5.dp, LatentColors.Amber, RoundedCornerShape(999.dp))
                         .combinedClickable(onClick = { Haptics.tick(context); iszOn = !iszOn; cam.isz = iszOn; cam.refresh() }).padding(horizontal = 8.dp, vertical = 3.dp))
             }
-            Text((if (zoomOk) "LENS VIA ZOOM" else "LENS BY XIAOMI") + " · FILM OVER JPEG", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 76.dp))
+            Text((if (zoomOk) "LENS VIA ZOOM" else "LENS BY XIAOMI") + " · FILM OVER JPEG", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 122.dp))
             FilmStrip(settings.preset, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) { id ->
                 com.celestial.latent.develop.Presets.byId(context, id)?.let { preset ->
                     onSettingsChange(settings.copy(preset = id, film = preset.recipe.film))

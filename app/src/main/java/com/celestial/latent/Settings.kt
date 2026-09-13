@@ -46,6 +46,7 @@ data class AppSettings(
      * cancels out the EV dial.
      */
     val engineAutoExposure: Boolean = false,
+    val openingAnimation: Boolean = true,
 ) {
     companion object {
         const val ANTIBANDING_OFF = 0
@@ -79,6 +80,7 @@ data class AppSettings(
                 autoDevelop = p.getBoolean("autoDevelop", true),
                 filmPreview = p.getBoolean("filmPreview", true),
                 engineAutoExposure = p.getBoolean("engineAutoExposure", false),
+                openingAnimation = p.getBoolean("openingAnimation", true),
             )
         }
 
@@ -105,6 +107,7 @@ data class AppSettings(
                 .putBoolean("autoDevelop", s.autoDevelop)
                 .putBoolean("filmPreview", s.filmPreview)
                 .putBoolean("engineAutoExposure", s.engineAutoExposure)
+                .putBoolean("openingAnimation", s.openingAnimation)
                 .apply()
         }
     }
