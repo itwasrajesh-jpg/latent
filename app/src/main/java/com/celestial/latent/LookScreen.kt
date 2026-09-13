@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -135,6 +136,7 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
     var result by remember { mutableStateOf<com.celestial.latent.develop.Reconstruct.Attempt?>(null) }
     var resultBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var saved by remember { mutableStateOf("") }
+    var expanded by remember { mutableStateOf<Bitmap?>(null) }
 
     /** Builds an emulsion to match the references, on the test shot. */
     fun reconstruct(target: Fingerprint) {
@@ -163,6 +165,22 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
 
     val target = if (references.isEmpty()) null else Fingerprint.average(references.map { it.second })
     val spread = if (references.size > 1) Fingerprint.spread(references.map { it.second }) else 0f
+
+    expanded?.let { bmp ->
+        Box(
+            Modifier.fillMaxSize().background(Color(0xF2000000))
+                .combinedClickable(onClick = { expanded = null }),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(bmp.asImageBitmap(), null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(12.dp))
+            Text(
+                "tap to close",
+                color = LatentColors.TextDim, fontSize = 11.sp,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp),
+            )
+        }
+        return
+    }
 
     Column(
         Modifier.fillMaxSize().background(LatentColors.Background)
@@ -251,16 +269,20 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
                 val ref = references.firstOrNull()?.let { thumbs[it.first] }
                 if (ref != null) {
                     Image(ref.asImageBitmap(), null, contentScale = ContentScale.Crop,
-                        modifier = Modifier.weight(1f).aspectRatio(3f / 4f).clip(RoundedCornerShape(6.dp)))
+                        modifier = Modifier.weight(1f).aspectRatio(3f / 4f).clip(RoundedCornerShape(6.dp))
+                            .combinedClickable(onClick = { expanded = ref }))
                 } else Box(Modifier.weight(1f).aspectRatio(3f / 4f))
                 val made = resultBitmap
                 if (made != null) {
-                    Image(made.asImageBitmap(), null, contentScale = ContentScale.Crop,
-                        modifier = Modifier.weight(1f).aspectRatio(3f / 4f).clip(RoundedCornerShape(6.dp)))
+                    // Tap to see it properly: a thumbnail is no way to judge a film.
+                    Image(made.asImageBitmap(), null, contentScale = ContentScale.Fit,
+                        modifier = Modifier.weight(1f).aspectRatio(3f / 4f).clip(RoundedCornerShape(6.dp))
+                            .background(LatentColors.Surface)
+                            .combinedClickable(onClick = { expanded = made }))
                 } else Box(Modifier.weight(1f).aspectRatio(3f / 4f).clip(RoundedCornerShape(6.dp)).background(LatentColors.Surface))
             }
             Row(Modifier.fillMaxWidth().padding(bottom = 18.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("REFERENCE", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp)
+                Text("REFERENCE · TAP", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp)
                 Text(
                     "CLOSEST · " + com.celestial.latent.develop.Reconstruct.percent(p.best?.distance),
                     color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp,

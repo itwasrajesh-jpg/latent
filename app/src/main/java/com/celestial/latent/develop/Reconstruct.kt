@@ -22,6 +22,10 @@ import kotlin.random.Random
  */
 object Reconstruct {
 
+    /** The paper a film was designed for, or none for a slide film. */
+    private fun printFor(base: org.json.JSONObject): String? =
+        base.optJSONObject("info")?.optString("target_print")?.takeIf { it.isNotBlank() && it != "null" }
+
     data class Attempt(val shape: Emulsion.Shape, val distance: Float, val jpeg: ByteArray?)
 
     data class Progress(val tried: Int, val total: Int, val best: Attempt?, val note: String)
@@ -45,6 +49,8 @@ object Reconstruct {
         val dir = EngineAssets.prepare(context) { onProgress(Progress(0, rounds, null, it)) } ?: return null
         val base = Emulsion.baseProfile(context, baseStock) ?: return null
         val stockId = "celestial_working"
+        // Read once: this walks the profile's JSON, and the search runs hundreds of attempts.
+        val paper = printFor(base)
 
         // The photo is decoded once and reused: only the film changes between attempts.
         val source = runCatching {
@@ -63,7 +69,12 @@ object Reconstruct {
             return runCatching {
                 val recipe = Recipe(
                     film = stockId,
-                    scanFilm = true,          // no print stage: the emulsion itself is what is being judged
+                    // A negative MUST be printed. Scanning it directly gives the negative itself —
+                    // orange-masked and inverted — which is not what the references look like, so
+                    // the fit would be aiming at the wrong image entirely.
+                    // A negative must be printed; a slide film has no print stage and is scanned.
+                    paper = paper ?: Develop.DEFAULT_PAPER,
+                    scanFilm = paper == null,
                     grain = false, halation = false, glare = false, diffusion = false,
                     previewMaxSize = 320,
                     autoExposure = true,      // each attempt is levelled, so brightness is not what is matched
@@ -123,7 +134,8 @@ object Reconstruct {
         // The working profile is scratch: saving writes its own file under a chosen name.
         runCatching { EngineAssets.profileFile(stockId)?.delete() }
         onProgress(Progress(tried, rounds, best, if (cancelled) "stopped" else "finished"))
-        Log.i("Latent", "reconstruction finished after $tried attempts, distance ${best?.distance}")
+        Log.i("Latent", "reconstruction finished after $tried attempts, distance ${best?.distance}, " +
+            "test shot ${source.width}x${source.height}, printed on ${paper ?: "no print — scanned directly"}")
         return best
     }
 
