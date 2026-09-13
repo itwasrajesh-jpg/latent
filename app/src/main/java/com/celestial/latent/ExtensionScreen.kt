@@ -358,6 +358,13 @@ fun ExtensionScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Un
             }
             Text((if (zoomOk) "LENS VIA ZOOM" else "LENS BY XIAOMI") + " · FILM OVER JPEG", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 1.sp, modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 122.dp))
             FilmStrip(settings.preset, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) { id ->
+                if (id.startsWith("stock:")) {
+                    com.celestial.latent.develop.Recipes.load(context, id.removePrefix("stock:"))?.let { r ->
+                        onSettingsChange(settings.copy(preset = id, film = r.film))
+                        com.celestial.latent.develop.Recipes.setCurrent(context, r)
+                    }
+                    return@FilmStrip
+                }
                 com.celestial.latent.develop.Presets.byId(context, id)?.let { preset ->
                     onSettingsChange(settings.copy(preset = id, film = preset.recipe.film))
                     com.celestial.latent.develop.Recipes.setCurrent(context, preset.recipe)

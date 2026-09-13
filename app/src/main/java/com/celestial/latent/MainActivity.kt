@@ -28,6 +28,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -90,6 +91,9 @@ private fun Root() {
         return
     }
     var settings by remember { mutableStateOf(AppSettings.load(context)) }
+    // Pick up a previously copied engine folder, so films built earlier are visible straight
+    // away rather than appearing only after something happens to look for them.
+    LaunchedEffect(Unit) { com.celestial.latent.develop.EngineAssets.attach(context) }
     // Shown once per launch, over the camera, which opens behind it. Declared after settings,
     // which it reads.
     var opening by remember { mutableStateOf(settings.openingAnimation) }

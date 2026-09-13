@@ -251,7 +251,22 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
             // The engine's authored looks: each one is a full starting recipe, including the
             // per-stock grain and halation that make stocks differ.
             val looks = remember { com.celestial.latent.develop.Presets.all(context) }
+            // Films built here belong in the darkroom too, or they can be shot with but not edited.
+            val ourStocks = remember(com.celestial.latent.develop.Recipes.names(context).size) {
+                com.celestial.latent.develop.Recipes.stocks(context)
+            }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ourStocks.forEach { (name, saved) ->
+                    val on = lookId == "stock:" + name
+                    Column(
+                        Modifier.clip(RoundedCornerShape(6.dp)).background(if (on) LatentColors.Amber else LatentColors.Surface)
+                            .combinedClickable(onClick = { Haptics.tick(context); lookId = "stock:" + name; recipe = saved })
+                            .padding(horizontal = 11.dp, vertical = 6.dp),
+                    ) {
+                        Text(name.uppercase(), color = if (on) LatentColors.AmberInk else LatentColors.TextBright, fontSize = 10.sp, letterSpacing = 1.sp)
+                        Text("built here", color = if (on) LatentColors.AmberInk.copy(alpha = 0.7f) else LatentColors.Text, fontSize = 8.sp)
+                    }
+                }
                 looks.forEach { preset ->
                     val on = preset.id == lookId
                     Column(

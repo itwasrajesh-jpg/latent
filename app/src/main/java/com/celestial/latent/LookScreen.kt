@@ -161,6 +161,9 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
     // A change that arrives while a develop is running is not thrown away: it runs again when
     // that one finishes, so the picture always ends up matching the controls.
     var rerenderPending by remember { mutableStateOf(false) }
+    // Naming is the user's, not the app's: a stock called "Celestial 17" tells you nothing and
+    // was invented without asking.
+    var stockName by remember { mutableStateOf("") }
 
     /** Re-develops the test shot with the fit's emulsion plus whatever has been adjusted. */
     // What the references say about grain, halation, bloom and glare. Declared here rather than
@@ -465,9 +468,24 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
             if (tweaking) Text("re-developing…", color = LatentColors.Amber, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp))
             Spacer(Modifier.height(18.dp))
 
+            androidx.compose.material3.OutlinedTextField(
+                value = stockName,
+                onValueChange = { stockName = it.take(28) },
+                singleLine = true,
+                label = { Text("name this film", color = LatentColors.TextDim, fontSize = 12.sp) },
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = LatentColors.TextBright,
+                    unfocusedTextColor = LatentColors.TextBright,
+                    focusedBorderColor = LatentColors.Amber,
+                    unfocusedBorderColor = LatentColors.Line,
+                    cursorColor = LatentColors.Amber,
+                ),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+            )
             Row(Modifier.fillMaxWidth().padding(bottom = 24.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Pill("save as a stock", accent = true) {
-                    val name = "Celestial " + (references.size * 7 % 90 + 10)
+                Pill("save as a stock", accent = stockName.isNotBlank()) {
+                    if (stockName.isBlank()) saved = "give it a name first" else {
+                    val name = stockName.trim()
                     val id = com.celestial.latent.develop.Reconstruct.save(context, best.shape, BASE_STOCK, name)
                     saved = if (id == null) "could not save" else {
                         // The stock carries what was read from the references: its own grain,
@@ -482,7 +500,8 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
                             id, best, paper, tweak, texture,
                         )
                         com.celestial.latent.develop.Recipes.save(context, name, recipe)
-                        "saved as $name — it is in the film strip"
+                        "saved as $name — it is at the start of the film strip"
+                    }
                     }
                 }
             }

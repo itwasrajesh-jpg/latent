@@ -387,5 +387,17 @@ object Recipes {
     fun load(ctx: Context, name: String): Recipe? = prefs(ctx).getString(name, null)?.let { Recipe.fromJson(it) }
     fun delete(ctx: Context, name: String) = prefs(ctx).edit().remove(name).apply()
 
+    /**
+     * The films Latent has built, newest first.
+     *
+     * A built stock is a saved recipe whose film is a generated profile — so it can be offered
+     * alongside the engine's own looks instead of being saved somewhere nothing looks at.
+     */
+    fun stocks(ctx: Context): List<Pair<String, Recipe>> =
+        names(ctx).mapNotNull { name ->
+            val r = load(ctx, name) ?: return@mapNotNull null
+            if (Develop.isOurStock(r.film)) name to r else null
+        }
+
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 }

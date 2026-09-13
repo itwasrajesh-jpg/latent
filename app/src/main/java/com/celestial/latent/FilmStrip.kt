@@ -34,6 +34,13 @@ import com.celestial.latent.ui.LatentColors
 fun FilmStrip(selected: String, modifier: Modifier = Modifier, onLongPress: () -> Unit = {}, onSelect: (String) -> Unit) {
     val context = LocalContext.current
     val looks = remember { Presets.all(context) }
+    // Films built in the film builder come first: they are yours, and they were invisible
+    // before this — saved into the recipe store, which nothing on this screen ever read.
+    // Keyed on how many recipes are stored, so a film built in the builder appears here
+    // without waiting for the app to be restarted.
+    val ours = remember(com.celestial.latent.develop.Recipes.names(context).size) {
+        com.celestial.latent.develop.Recipes.stocks(context)
+    }
     Row(
         modifier
             // A soft fade behind the strip so the names stay readable over a bright scene
@@ -47,6 +54,22 @@ fun FilmStrip(selected: String, modifier: Modifier = Modifier, onLongPress: () -
             .padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        ours.forEach { (name, recipe) ->
+            val id = "stock:" + name
+            val on = id == selected
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier.clip(RoundedCornerShape(6.dp))
+                    .background(if (on) LatentColors.Amber else Color(0x73000000))
+                    .combinedClickable(
+                        onClick = { if (!on) { Haptics.tick(context); onSelect(id) } },
+                        onLongClick = { Haptics.click(context); onLongPress() },
+                    )
+                    .padding(horizontal = 13.dp, vertical = 7.dp),
+            ) {
+                Text(name.uppercase(), color = if (on) LatentColors.AmberInk else LatentColors.TextBright, fontSize = 11.sp, letterSpacing = 1.sp)
+                Text("built here", color = if (on) LatentColors.AmberInk.copy(alpha = 0.7f) else LatentColors.Text, fontSize = 8.sp, letterSpacing = 0.5.sp)
+            }
+        }
         looks.forEach { preset ->
             val id = preset.id
             // "Portra 400 — Wedding Warm" reads as two lines: the stock, then the look.

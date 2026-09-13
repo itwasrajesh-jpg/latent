@@ -22,6 +22,23 @@ object EngineAssets {
     @Volatile var directory: String? = null
         private set
 
+    /**
+     * Picks up an existing copy without making one.
+     *
+     * The directory is only known once something has asked, and nothing asked at startup — so on
+     * a fresh launch the films Latent had built were invisible in the strip, and developing with
+     * one would quietly fall back to a bundled stock. Cheap: one check for a marker file.
+     */
+    fun attach(context: Context): String? {
+        directory?.let { return it }
+        val dir = File(context.filesDir, ROOT)
+        if (File(dir, ".complete").exists()) {
+            directory = dir.absolutePath
+            Log.i("Latent", "engine assets already present at ${dir.absolutePath}")
+        }
+        return directory
+    }
+
     fun isReady(context: Context): Boolean {
         directory?.let { return true }
         val dir = File(context.filesDir, ROOT)

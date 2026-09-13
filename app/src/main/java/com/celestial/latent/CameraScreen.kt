@@ -408,6 +408,15 @@ fun CameraScreen(
             }
             FilmStrip(settings.preset, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
                 onLongPress = { lastRawUri?.let { u -> onOpenDarkroom(u, true) } }) { id ->
+                    // A film built here is a saved recipe rather than one of the engine's looks.
+                    if (id.startsWith("stock:")) {
+                        com.celestial.latent.develop.Recipes.load(context, id.removePrefix("stock:"))?.let { r ->
+                            onSettingsChange(settings.copy(preset = id, film = r.film))
+                            com.celestial.latent.develop.Recipes.setCurrent(context, r)
+                            com.celestial.latent.develop.LookBaker.invalidate()
+                        }
+                        return@FilmStrip
+                    }
                     val preset = com.celestial.latent.develop.Presets.byId(context, id)
                     if (preset != null) {
                         // A look is a whole recipe, not just a film: the per-stock grain and
