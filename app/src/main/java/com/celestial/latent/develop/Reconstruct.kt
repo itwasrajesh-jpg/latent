@@ -87,6 +87,18 @@ object Reconstruct {
         var temperature = 1f
         val random = Random(1)
 
+        /** Develops one candidate and returns what it measures, without scoring it. */
+        fun evaluateFingerprint(shape: Emulsion.Shape): Fingerprint? {
+            Emulsion.write(base, shape, stockId, "Working") ?: return null
+            return runCatching {
+                SpektraEngine(dir).use { engine ->
+                    val recipe = recipeFor(stockId, Attempt(shape, 0f, null, baseEv), paper, previewSize = 320)
+                    val (bytes, _) = Develop.renderWith(engine, context, source, recipe, preview = true)
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { Fingerprint.of(it) }
+                }
+            }.getOrNull()
+        }
+
         fun evaluate(shape: Emulsion.Shape, keepImage: Boolean): Attempt? {
             Emulsion.write(base, shape, stockId, "Working") ?: return null
             return runCatching {
@@ -125,6 +137,30 @@ object Reconstruct {
             }.getOrNull()
         }
 
+        // Which way do the enlarger's filters push the colour?
+        //
+        // They are subtractive and the engine's sign convention is not something to assume:
+        // more yellow filtration means less blue exposure on the paper, which can read as a
+        // warmer or a cooler print depending on how the stage is written. So it is measured —
+        // one nudge each, and the direction that comes back is what the search then trusts.
+        // Guessing here is how a fit ends up chasing a colour cast instead of correcting it.
+        var yellowDirection = 1f
+        var magentaDirection = 1f
+        runCatching {
+            if (cancelled) return@runCatching
+            val plain = evaluateFingerprint(Emulsion.Shape())
+            val warmer = evaluateFingerprint(Emulsion.Shape(yFilter = 6f))
+            val greener = evaluateFingerprint(Emulsion.Shape(mFilter = 6f))
+            if (plain != null && warmer != null) {
+                yellowDirection = if (warmer.neutralWarmth >= plain.neutralWarmth) 1f else -1f
+            }
+            if (plain != null && greener != null) {
+                magentaDirection = if (greener.neutralGreen >= plain.neutralGreen) 1f else -1f
+            }
+            Log.i("Latent", "filter directions: yellow $yellowDirection, magenta $magentaDirection")
+            onProgress(Progress(0, rounds, null, "measured how the filters move the colour"))
+        }
+
         val start = evaluate(current, keepImage = true)
         if (start == null) {
             // If the very first attempt fails, every other one will fail the same way: stop and
@@ -139,6 +175,31 @@ object Reconstruct {
 
         var tried = 0
         val holdsLane = holdsLaneEarly
+
+        /**
+         * Aim the two filters at the target's neutrals rather than searching for them.
+         *
+         * Brightness and colour balance each have one control with a direct effect, so the
+         * error can be measured and corrected — like focusing a lens rather than guessing where
+         * focus lies. Done every so often during the search, so a drift cannot settle in.
+         */
+        fun correctColour() {
+            val fp = evaluateFingerprint(current) ?: return
+            val warmError = fp.neutralWarmth - target.neutralWarmth
+            val greenError = fp.neutralGreen - target.neutralGreen
+            if (kotlin.math.abs(warmError) < 0.02f && kotlin.math.abs(greenError) < 0.02f) return
+            val v = current.asArray().copyOf()
+            // A rough gain: the filters run to twenty, the neutral figures to about one.
+            v[15] = (v[15] - yellowDirection * warmError * 14f).coerceIn(-20f, 20f)
+            v[16] = (v[16] - magentaDirection * greenError * 14f).coerceIn(-20f, 20f)
+            val aimed = Emulsion.Shape.from(v)
+            val attempt = evaluate(aimed, keepImage = false) ?: return
+            if (attempt.distance < currentDistance) {
+                current = aimed
+                currentDistance = attempt.distance
+                if (best == null || attempt.distance < best!!.distance) best = evaluate(aimed, keepImage = true) ?: attempt
+            }
+        }
         while (tried < rounds && !cancelled) {
             // One number at a time, by a step that shrinks as the search settles.
             val v = current.asArray().copyOf()
@@ -164,6 +225,8 @@ object Reconstruct {
             }
             // Settle gradually; a few larger jumps early, finer adjustments later.
             temperature = (1f - tried.toFloat() / rounds).coerceAtLeast(0.15f)
+            // Correct the balance at intervals, so the curve search cannot drift the colour.
+            if (tried % 40 == 0) correctColour()
             if (tried % 8 == 0) {
                 onProgress(Progress(tried, rounds, best, "closest so far: ${percent(best?.distance)}"))
             }

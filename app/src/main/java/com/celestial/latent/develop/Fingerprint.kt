@@ -211,6 +211,7 @@ data class Fingerprint(
             var neutralWarm = 0f
             var neutralGreenLean = 0f
             var foundNeutrals = false
+            var neutralPixels = 0
             run {
                 val sats = ArrayList<Float>(count / 4)
                 for (k in 0 until count) {
@@ -231,6 +232,7 @@ data class Fingerprint(
                         if (sat > limit) continue
                         sr += r[k].toDouble(); sg += g[k].toDouble(); sb += b[k].toDouble(); n++
                     }
+                    neutralPixels = n
                     if (n >= 20) {
                         val mr = sr / n; val mg = sg / n; val mb = sb / n
                         val mean = ((mr + mg + mb) / 3.0).coerceAtLeast(1e-4)
@@ -267,7 +269,10 @@ data class Fingerprint(
             // contrast are always measurable; the rest depend on what is actually in the frame.
             val total = count.toFloat().coerceAtLeast(1f)
             val cover = FloatArray(LABELS.size) { 1f }
-            val neutralCover = if (foundNeutrals) 0.25f else 0f
+            // How much of the picture was actually neutral, not a fixed guess. This was pinned
+            // at a quarter regardless, and since coverage is square-rooted before weighting, the
+            // measure whose whole job is catching a colour cast was running at half strength.
+            val neutralCover = if (!foundNeutrals) 0f else (neutralPixels / total * 5f).coerceIn(0.35f, 1f)
             cover[7] = neutralCover
             cover[8] = neutralCover
             val shadowCover = (dn / total).coerceIn(0f, 1f)
