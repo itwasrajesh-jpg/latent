@@ -1,39 +1,53 @@
-# Notices
+# Latent — notices
 
-Latent is free software, released under the GNU General Public License v3.0
-(see LICENSE).
+Copyright © 2026 Celestial (itwasrajesh-jpg).
 
-## Required attribution (GPLv3 §7(b))
+Latent is free software, released under the GNU General Public License version 3
+or (at your option) any later version. See LICENSE for the full terms.
+
+## Required attribution
+
+Under GPLv3 §7(b), the following notices must be preserved in any distribution of
+this software or of a work derived from it, and shown to users in a place they
+can reasonably find:
 
 > **Spektrafilm for Android** by Akshay Sharma — https://github.com/thetechgeekko/Spektrafilm-android
 >
 > Film modeling powered by **spektrafilm** (Andrea Volpato) — https://github.com/andreavolpato/spektrafilm
+>
+> **Latent** by Celestial — https://github.com/itwasrajesh-jpg/latent
 
-Both lines are displayed in Latent's About screen with clickable links.
+All three appear in the app's About screen with clickable links.
 
-## Credits
+## What is whose
 
-Film modeling will be powered by **spektrafilm** — a physically based spectral
-film simulation by Andrea Volpato
-(https://github.com/andreavolpato/spektrafilm), GPLv3. Film profiles and LUTs
-from that project are licensed CC BY-SA 4.0.
+**spektrafilm** (Andrea Volpato) is the research and the film science: the spectral
+model, the measured film and paper profiles, the density curves, and the
+negative → enlarger → print → scan chain. CC BY-SA 4.0 for the profile and LUT data.
 
-The Android engine port is **Spektrafilm-android** by thetechgeekko
-(https://github.com/thetechgeekko/Spektrafilm-android), GPLv3.
+**Spektrafilm for Android** (Akshay Sharma) is the C++/NDK port of that engine to
+Android, checked bit-for-bit against the original. GPLv3.
 
-Latent includes the engine module `engine:spektra-core` and the RAW decoder
-module `lib:libraw` from the Android port. They are not committed to this
-repository: the build workflow fetches them from a pinned commit of
-https://github.com/itwasrajesh-jpg/Spektrafilm-android (an unmodified mirror of
-the upstream port), currently:
+**Latent** (Celestial) is this application: the camera (viewfinder, all lenses, DNG
+capture, burst alignment and stacking, exposure and focus controls), the develop
+flow and the darkroom, the live film preview in the viewfinder, the colour-noise
+cleanup, the Display P3 and Rec.709 output conversions, the film-to-paper pairing,
+and the FFT implementation of the diffusion filter. GPLv3.
 
-    3c8080415d7bff2e915919e199a38ca40257eb4b
+## Engine
 
-RAW decoding uses LibRaw (LGPL-2.1 / CDDL-1.0), vendored in that project's
-`lib:libraw` module.
+The engine and RAW decoder are fetched at build time from a pinned commit of a
+mirror of the Android port; they are not vendored into this repository. The pinned
+commit is recorded in `.github/workflows/build.yml` and shown in the About screen.
+Any local change to the engine is documented in that mirror's NOTICE.
 
+## Other components
 
-## Latent
+- **LibRaw** — RAW decoding. LGPL-2.1 / CDDL-1.0.
+- **JTransforms** — the FFT used by the diffusion filter. BSD 2-clause.
+- Film profiles and LUTs from spektrafilm — CC BY-SA 4.0. Any profile derived from
+  them (for example a blended emulsion) is also CC BY-SA 4.0 and must not be named
+  as a product of Kodak, Fujifilm, Leica or any other manufacturer.
 
-Camera, develop flow and darkroom by Celestial — https://github.com/itwasrajesh-jpg/latent
-Written with Anthropic's Claude, in conversation with the author.
+"Latent" and "Celestial" are names, not licensed code: GPLv3 covers the software,
+not the naming of it.

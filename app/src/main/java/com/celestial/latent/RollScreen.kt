@@ -97,11 +97,17 @@ fun RollScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, o
 
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            val name = context.contentResolver.query(uri, arrayOf(MediaStore.Images.Media.DISPLAY_NAME), null, null, null)
-                ?.use { if (it.moveToFirst()) it.getString(0) else null }.orEmpty()
+            // A document provider need not answer a MediaStore column, so ask for the standard
+            // one too and fall back to the path rather than crashing on an odd provider.
+            val name = (runCatching {
+                context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { if (it.moveToFirst()) it.getString(0) else null }
+            }.getOrNull() ?: uri.lastPathSegment).orEmpty()
             val isRaw = name.endsWith(".dng", true) || name.endsWith(".raw", true) || name.endsWith(".arw", true) || name.endsWith(".cr2", true) || name.endsWith(".nef", true)
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            DevelopQueue.submit(context, DevelopQueue.Job(uri, com.celestial.latent.develop.Recipes.current(context).copy(film = settings.film), isRaw = isRaw))
+            // An imported photo opens in the darkroom. Developing it immediately would decide
+            // the look for you, which is the opposite of why you would import something.
+            onOpenDarkroom(uri, isRaw)
         }
     }
 
@@ -114,7 +120,8 @@ fun RollScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, o
             Text("‹", color = LatentColors.Text, fontSize = 22.sp, modifier = Modifier.combinedClickable(onClick = onBack).padding(horizontal = 6.dp))
             Text("ROLL", color = LatentColors.Text, fontSize = 12.sp, letterSpacing = 4.sp)
             Text("import", color = LatentColors.Amber, fontSize = 12.sp,
-                modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); importer.launch(arrayOf("image/*", "image/x-adobe-dng")) }).padding(6.dp))
+                modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); // Some file providers report a DNG as a generic binary, which "image/*" would hide.
+                    importer.launch(arrayOf("image/*", "image/x-adobe-dng", "application/octet-stream")) }).padding(6.dp))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
             listOf("all" to "ALL ${frames.size}", "developed" to "DEVELOPED ${frames.count { it.developed }}", "latent" to "LATENT ${frames.count { it.isRaw && !it.developed }}").forEach { (id, label) ->

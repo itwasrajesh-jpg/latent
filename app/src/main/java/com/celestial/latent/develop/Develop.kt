@@ -471,10 +471,20 @@ object Develop {
     fun developJpeg(context: Context, image: Uri, recipe: Recipe, maxEdge: Int = 0, log: (String) -> Unit = {}): Uri =
         developFull(context, image, isRaw = false, recipe = recipe, maxEdge = maxEdge, log = log)
 
+    /**
+     * The source file's name, for naming the developed copy. An imported file comes from the
+     * document picker rather than the gallery, and such a provider need not answer a MediaStore
+     * column — asking can throw. Falls back to the standard document name, then to "LATENT".
+     */
     private fun baseNameOf(context: Context, uri: Uri): String {
-        val name = context.contentResolver.query(uri, arrayOf(MediaStore.Images.Media.DISPLAY_NAME), null, null, null)
-            ?.use { if (it.moveToFirst()) it.getString(0) else null } ?: "LATENT"
-        return name.substringBeforeLast('.')
+        val name = runCatching {
+            context.contentResolver.query(uri, arrayOf(MediaStore.Images.Media.DISPLAY_NAME), null, null, null)
+                ?.use { if (it.moveToFirst()) it.getString(0) else null }
+        }.getOrNull() ?: runCatching {
+            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { if (it.moveToFirst()) it.getString(0) else null }
+        }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/') ?: "LATENT"
+        return name.substringBeforeLast('.').ifBlank { "LATENT" }
     }
 
     /** Developing again never replaces an earlier result: _2, _3 … are appended as needed. */

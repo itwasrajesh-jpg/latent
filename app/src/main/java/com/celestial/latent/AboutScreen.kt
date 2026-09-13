@@ -50,6 +50,15 @@ fun AboutScreen(onBack: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         Text("Film modeling powered by spektrafilm (Andrea Volpato) —", color = LatentColors.TextBright, fontSize = 14.sp, lineHeight = 19.sp)
         Link("https://github.com/andreavolpato/spektrafilm") { open(it) }
+        Spacer(Modifier.height(12.dp))
+        // Latent's own notice, on the same terms it asks of others.
+        Text("Latent by Celestial —", color = LatentColors.TextBright, fontSize = 14.sp, lineHeight = 19.sp)
+        Link("https://github.com/itwasrajesh-jpg/latent") { open(it) }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "All three notices must be kept in any distribution of Latent or of a work derived from it.",
+            color = LatentColors.TextDim, fontSize = 12.sp, lineHeight = 17.sp,
+        )
 
         Spacer(Modifier.height(22.dp))
         Text("LICENCES", color = LatentColors.TextDim, fontSize = 11.sp, letterSpacing = 2.sp)
