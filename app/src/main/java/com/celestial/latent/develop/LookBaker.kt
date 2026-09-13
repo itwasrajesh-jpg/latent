@@ -61,8 +61,13 @@ object LookBaker {
             val t0 = System.nanoTime()
             val r = Develop.sanitised(recipe)
             val look = SpektraEngine.fromAssets(context.assets).use { engine ->
-                val cube = engine.bakeCubeLut(r.toParams(), SIZE)
-                val table = parseCube(cube, SIZE) ?: return null
+                // Latent's own output spaces are applied after the engine, so the table gets the
+                // same treatment — otherwise the viewfinder would show sRGB while the file saved
+                // in Rec.709 or P3, and the two would not match.
+                val ourSpace = if (OutputSpace.isOurs(r.outputColorSpace)) r.outputColorSpace else ""
+                val params = (if (ourSpace.isEmpty()) r else r.copy(outputColorSpace = OutputSpace.ENGINE_SRGB)).toParams()
+                val cube = engine.bakeCubeLut(params, SIZE)
+                val table = (parseCube(cube, SIZE) ?: return null).also { OutputSpace.convertTable(it, ourSpace) }
                 Look(table, SIZE, gainFor(engine, r), key)
             }
             Log.i("Latent", "look baked for ${recipe.film} in ${(System.nanoTime() - t0) / 1_000_000} ms (gain ${"%.2f".format(look.gain)})")

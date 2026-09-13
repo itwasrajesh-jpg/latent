@@ -400,8 +400,19 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                     }
                     "colour" -> {
                         Head("OUTPUT COLOUR SPACE", null) {}
-                        Chips(listOf("SRGB", "ADOBE_RGB", "PROPHOTO", "REC2020", "ACES2065_1", "LINEAR_SRGB"), recipe.outputColorSpace) { set { copy(outputColorSpace = it) } }
-                        if (recipe.outputColorSpace != "SRGB") Note("A JPEG has only 256 steps per channel. Spread over a wide space this can band in skies and skin. sRGB is the safe choice; Adobe RGB is a modest step up.")
+                        Chips(listOf("SRGB", "DISPLAY_P3", "REC709_24", "ADOBE_RGB", "PROPHOTO", "REC2020", "ACES2065_1", "LINEAR_SRGB"), recipe.outputColorSpace) { set { copy(outputColorSpace = it) } }
+                        Note(when (recipe.outputColorSpace) {
+                            "SRGB" -> "Sharing, the web, messaging. The safe default."
+                            "DISPLAY_P3" -> "What this phone's screen actually shows, so the file looks its best on the device. Converted by Latent from the engine's sRGB."
+                            "REC709_24" -> "The video standard: sRGB's colours with a 2.4 gamma for a dark room. Pairs with the cine stocks. Converted by Latent."
+                            "ADOBE_RGB" -> "Print work — more greens and cyans than sRGB, still safe in an 8-bit file."
+                            "PROPHOTO" -> "Keeps everything for editing elsewhere. Can band in an 8-bit JPEG."
+                            "REC2020" -> "Very wide, for HDR video pipelines."
+                            "ACES2065_1" -> "For grading in another tool. Looks washed out if viewed directly."
+                            else -> "Unencoded linear data, for compositing. Not for viewing."
+                        })
+                        if (recipe.outputColorSpace in listOf("PROPHOTO", "REC2020", "ACES2065_1", "LINEAR_SRGB"))
+                            Note("A JPEG has only 256 steps per channel. Spread over a space this wide it can band in skies and skin.")
                         Head("OUT-OF-GAMUT COLOURS", null) {}
                         Chips(listOf("LEGACY_CLIP", "OFF", "ACES_RGC", "OKLCH", "OKLRAB"), recipe.outputGamutCompress) { set { copy(outputGamutCompress = it) } }
                         Head("FILMING-SIDE COMPRESSION", null) {}

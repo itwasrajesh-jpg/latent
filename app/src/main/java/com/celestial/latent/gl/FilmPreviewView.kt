@@ -46,8 +46,15 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
         requestRender()
     }
 
-    /** Linear gain applied before the table, matching the engine's own auto-exposure. */
-    fun setExposureGain(gain: Float) { renderer.exposureGain = gain; requestRender() }
+    /**
+     * Linear gain applied before the table, matching the engine's own auto-exposure. Eased
+     * towards the new value rather than jumped, so the viewfinder settles instead of stepping.
+     */
+    fun setExposureGain(gain: Float) {
+        val current = renderer.exposureGain
+        renderer.exposureGain = if (current <= 0f) gain else current + (gain - current) * 0.4f
+        requestRender()
+    }
 
     /**
      * Asks for a small copy of the next drawn frame, so the exposure gain can be metered from
@@ -84,6 +91,24 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
         @Volatile var grabSize = 0
         @Volatile var onGrab: ((FloatArray, Int, Int) -> Unit)? = null
         private var readBuffer: java.nio.ByteBuffer? = null
+        private var grabFbo = 0
+        private var grabTex = 0
+
+        /** A small off-screen target used only for metering the camera image. */
+        private fun createGrabTarget() {
+            val t = IntArray(1); GLES20.glGenTextures(1, t, 0); grabTex = t[0]
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, grabTex)
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, GRAB_SIDE, GRAB_SIDE, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST)
+            val fb = IntArray(1); GLES20.glGenFramebuffers(1, fb, 0)
+            grabFbo = fb[0]
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, grabFbo)
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, grabTex, 0)
+            val ok = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) == GLES20.GL_FRAMEBUFFER_COMPLETE
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+            if (!ok) { Log.e("Latent", "film preview: metering target incomplete; scene metering disabled"); grabFbo = 0 }
+        }
         private var lutTexture = 0
         private var lutSize = 0
         // Two samplers of different kinds must never share a texture unit: with no look table
@@ -182,34 +207,42 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uLut"), 1)
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-            // A frame grab, when one was asked for. Reading the whole viewport back would be
-            // 11 MB a time and would stutter the preview, so a centred square is read instead —
-            // ample for metering — into a buffer that is allocated once and reused.
+            // A frame grab, when one was asked for. Metering must see the CAMERA image, not
+            // our own output: reading back the screen would measure the gain and look we just
+            // applied and chase its own tail. So the camera texture is drawn once into a small
+            // off-screen buffer with the look switched off, and that is what gets measured.
             val want = grabSize
             val cb = onGrab
-            if (want > 0 && cb != null && viewW > 0 && viewH > 0) {
+            if (want > 0 && cb != null) {
                 grabSize = 0; onGrab = null
-                val side = minOf(viewW, viewH, READ_SIDE)
-                val x0 = (viewW - side) / 2
-                val y0 = (viewH - side) / 2
-                if (readBuffer == null) readBuffer = java.nio.ByteBuffer.allocateDirect(READ_SIDE * READ_SIDE * 4).order(java.nio.ByteOrder.nativeOrder())
-                val buf = readBuffer!!
-                buf.rewind()
-                GLES20.glReadPixels(x0, y0, side, side, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
-                val g = want.coerceAtMost(side)
-                val out = FloatArray(g * g * 3)
-                for (y in 0 until g) {
-                    val sy = y * side / g
-                    for (x in 0 until g) {
-                        val sx = x * side / g
-                        val i = (sy * side + sx) * 4
-                        val o = (y * g + x) * 3
-                        out[o] = SRGB_TO_LINEAR[buf.get(i).toInt() and 0xFF]
-                        out[o + 1] = SRGB_TO_LINEAR[buf.get(i + 1).toInt() and 0xFF]
-                        out[o + 2] = SRGB_TO_LINEAR[buf.get(i + 2).toInt() and 0xFF]
+                val g = want.coerceIn(8, GRAB_SIDE)
+                if (grabFbo == 0) createGrabTarget()
+                if (grabFbo != 0) {
+                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, grabFbo)
+                    GLES20.glViewport(0, 0, g, g)
+                    GLES20.glUseProgram(program)
+                    GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uGain"), 1f)
+                    GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uHasLut"), 0)
+                    GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                    GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texture)
+                    GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+                    if (readBuffer == null) readBuffer = java.nio.ByteBuffer.allocateDirect(GRAB_SIDE * GRAB_SIDE * 4).order(java.nio.ByteOrder.nativeOrder())
+                    val buf = readBuffer!!
+                    buf.rewind()
+                    GLES20.glReadPixels(0, 0, g, g, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
+                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+                    GLES20.glViewport(0, 0, viewW, viewH)
+                    check("metering pass")
+
+                    val out = FloatArray(g * g * 3)
+                    for (i in 0 until g * g) {
+                        out[i * 3] = SRGB_TO_LINEAR[buf.get(i * 4).toInt() and 0xFF]
+                        out[i * 3 + 1] = SRGB_TO_LINEAR[buf.get(i * 4 + 1).toInt() and 0xFF]
+                        out[i * 3 + 2] = SRGB_TO_LINEAR[buf.get(i * 4 + 2).toInt() and 0xFF]
                     }
+                    cb(out, g, g)
                 }
-                cb(out, g, g)
             }
             if (!reportedError && frames.get() > 0) {
                 val e = GLES20.glGetError()
@@ -268,6 +301,8 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
             grabSize = 0
             onGrab = null
             readBuffer = null
+            grabFbo = 0
+            grabTex = 0
             surface?.release(); surface = null
             cameraSurfaceTexture?.release(); cameraSurfaceTexture = null
         }
@@ -309,8 +344,8 @@ class FilmPreviewView(context: Context) : GLSurfaceView(context) {
     }
 
     companion object {
-        /** Side of the centred square read back for metering. 256 KB, not 11 MB. */
-        private const val READ_SIDE = 256
+        /** Side of the off-screen square used for metering. */
+        private const val GRAB_SIDE = 64
 
         /** The display curve undone, once, so metering sees scene-linear light. */
         private val SRGB_TO_LINEAR = FloatArray(256) { i ->

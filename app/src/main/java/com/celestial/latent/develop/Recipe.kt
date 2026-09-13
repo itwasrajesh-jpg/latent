@@ -222,6 +222,8 @@ data class Recipe(
             whiteLevel = scannerWhiteLevel, blackLevel = scannerBlackLevel,
         ),
         io = IoParams(
+            // Latent's own spaces (Display P3, Rec.709) are applied after the engine, so the
+            // engine itself is asked for sRGB in those cases — see Develop.render.
             outputColorSpace = runCatching { ColorSpace.valueOf(outputColorSpace) }.getOrDefault(ColorSpace.SRGB),
             outputGamutCompress = runCatching { OutputGamutCompress.valueOf(outputGamutCompress) }.getOrDefault(OutputGamutCompress.LEGACY_CLIP),
             inputGamutCompress = runCatching { InputGamutCompress.valueOf(inputGamutCompress) }.getOrDefault(InputGamutCompress.OFF),

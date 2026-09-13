@@ -254,7 +254,10 @@ object Develop {
         Log.i("Latent", "recipe: " + sanitised(recipe).summary())
         var dims = 0 to 0
         // GPU is preview-only: a full render always goes through the CPU engine.
-        val params = sanitised(if (preview) recipe else recipe.copy(gpuPreview = false)).toParams()
+        val base = sanitised(if (preview) recipe else recipe.copy(gpuPreview = false))
+        // Our own spaces are built from the engine's sRGB output, so ask it for sRGB.
+        val ourSpace = if (OutputSpace.isOurs(base.outputColorSpace)) base.outputColorSpace else ""
+        val params = (if (ourSpace.isEmpty()) base else base.copy(outputColorSpace = OutputSpace.ENGINE_SRGB)).toParams()
         val jpeg = SpektraEngine.fromAssets(context.assets).use { engine ->
             val result = if (preview) engine.simulatePreview(source.image, params) else engine.simulate(source.image, params)
             result.use { r -> dims = r.width to r.height; toJpeg(r.data, r.width, r.height, r.colorSpace) }
@@ -271,9 +274,9 @@ object Develop {
      * colour space — not bytes. Clamp, quantise to 8 bit, and tag the bitmap with that space so
      * the system colour-manages it and embeds the right profile on export.
      */
-    private fun toJpeg(data: ByteBuffer, w: Int, h: Int, colorSpace: com.spectrafilm.engine.ColorSpace): ByteArray {
+    private fun toJpeg(data: ByteBuffer, w: Int, h: Int, colorSpace: com.spectrafilm.engine.ColorSpace, ourSpace: String = ""): ByteArray {
         val f = data.order(ByteOrder.nativeOrder()).asFloatBuffer()
-        val bmp = taggedBitmap(w, h, colorSpace)
+        val bmp = taggedBitmap(w, h, colorSpace, ourSpace)
         val bandRows = (1024 * 1024 / w).coerceIn(1, h)
         val strip = IntArray(w * bandRows)
         var y = 0
@@ -288,6 +291,9 @@ object Develop {
                 strip[k++] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
                 i += 3
             }
+            // Display P3 and Rec.709 are not in the engine's list: converted here, from its
+            // sRGB output, and the bitmap is tagged so viewers read the file correctly.
+            if (OutputSpace.isOurs(ourSpace)) OutputSpace.convert(strip, ourSpace)
             bmp.setPixels(strip, 0, w, 0, y, w, rows)
             y += rows
         }
@@ -298,7 +304,12 @@ object Develop {
     }
 
     /** Bitmap tagged with the engine's output colour space, falling back to sRGB. */
-    private fun taggedBitmap(w: Int, h: Int, cs: com.spectrafilm.engine.ColorSpace): android.graphics.Bitmap {
+    private fun taggedBitmap(w: Int, h: Int, cs: com.spectrafilm.engine.ColorSpace, ourSpace: String = ""): android.graphics.Bitmap {
+        OutputSpace.androidSpace(ourSpace)?.let { space ->
+            return runCatching {
+                android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888, false, space)
+            }.getOrElse { android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888) }
+        }
         val named = when (cs) {
             com.spectrafilm.engine.ColorSpace.SRGB -> android.graphics.ColorSpace.Named.SRGB
             com.spectrafilm.engine.ColorSpace.ADOBE_RGB -> android.graphics.ColorSpace.Named.ADOBE_RGB
