@@ -57,7 +57,13 @@ private data class Frame(val uri: Uri, val name: String, val isRaw: Boolean, val
 
 /** The roll: every capture in DCIM/Latent, developed ones in colour, undeveloped ones waiting. */
 @Composable
-fun RollScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, onOpenDarkroom: (Uri, Boolean) -> Unit = { _, _ -> }, onBack: () -> Unit) {
+fun RollScreen(
+    settings: AppSettings,
+    onSettingsChange: (AppSettings) -> Unit,
+    onOpenDarkroom: (Uri, Boolean) -> Unit = { _, _ -> },
+    onOpenLookBuilder: () -> Unit = {},
+    onBack: () -> Unit,
+) {
     val context = LocalContext.current
     var frames by remember { mutableStateOf<List<Frame>>(emptyList()) }
     var filter by remember { mutableStateOf("all") }
@@ -119,9 +125,14 @@ fun RollScreen(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, o
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("‹", color = LatentColors.Text, fontSize = 22.sp, modifier = Modifier.combinedClickable(onClick = onBack).padding(horizontal = 6.dp))
             Text("ROLL", color = LatentColors.Text, fontSize = 12.sp, letterSpacing = 4.sp)
+            // Both actions sit together on the right so the title stays centred.
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("look", color = LatentColors.Amber, fontSize = 12.sp,
+                modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); onOpenLookBuilder() }).padding(6.dp))
             Text("import", color = LatentColors.Amber, fontSize = 12.sp,
                 modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); // Some file providers report a DNG as a generic binary, which "image/*" would hide.
                     importer.launch(arrayOf("image/*", "image/x-adobe-dng", "application/octet-stream")) }).padding(6.dp))
+            }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
             listOf("all" to "ALL ${frames.size}", "developed" to "DEVELOPED ${frames.count { it.developed }}", "latent" to "LATENT ${frames.count { it.isRaw && !it.developed }}").forEach { (id, label) ->

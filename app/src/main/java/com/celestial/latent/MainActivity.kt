@@ -121,9 +121,11 @@ private fun Root() {
             onOpenAbout = { screen = "about" },
             onBack = { screen = "camera" },
         )
+        "look" -> LookScreen(settings = settings, onBack = { screen = "roll" })
         "roll" -> RollScreen(
             settings = settings, onSettingsChange = { s -> settings = s; AppSettings.save(context, s) },
             onOpenDarkroom = { uri, isRaw -> darkroomSource = uri; darkroomIsRaw = isRaw; screen = "darkroom" },
+            onOpenLookBuilder = { screen = "look" },
             onBack = { screen = "camera" },
         )
         "darkroom" -> darkroomSource?.let { src ->
