@@ -163,6 +163,10 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
     var rerenderPending by remember { mutableStateOf(false) }
 
     /** Re-develops the test shot with the fit's emulsion plus whatever has been adjusted. */
+    // What the references say about grain, halation, bloom and glare. Declared here rather than
+    // further down in the layout, because the re-render and the save both need it.
+    val texture = if (textures.isEmpty()) null else com.celestial.latent.develop.Texture.average(textures)
+
     fun rerender() {
         val best = result ?: return
         val src = testShot ?: return
@@ -289,7 +293,6 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
         }
     }
 
-    val texture = if (textures.isEmpty()) null else com.celestial.latent.develop.Texture.average(textures)
         texture?.let { t ->
             Section("READ FROM THEM")
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(LatentColors.Surface).padding(13.dp)) {
