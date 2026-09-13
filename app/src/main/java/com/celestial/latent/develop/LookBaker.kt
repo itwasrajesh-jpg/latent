@@ -52,6 +52,18 @@ object LookBaker {
         }
     }
 
+    /** What the film would choose for this image — used by the darkroom's Auto level button. */
+    fun gainForSource(context: Context, recipe: Recipe, source: Develop.Source): Float {
+        if (!DevelopQueue.engineLane.tryAcquire()) return 0f
+        return try {
+            SpektraEngine.fromAssets(context.assets).use { e ->
+                e.exposureGain(source.image, Develop.sanitised(recipe).copy(autoExposure = true).toParams())
+            }
+        } catch (t: Throwable) {
+            Log.w("Latent", "auto level failed", t); 0f
+        } finally { DevelopQueue.engineLane.release() }
+    }
+
     fun bake(context: Context, recipe: Recipe): Look? {
         val key = colourKey(recipe)
         cached?.let { if (it.recipeKey == key) return it }
@@ -68,7 +80,9 @@ object LookBaker {
                 val params = (if (ourSpace.isEmpty()) r else r.copy(outputColorSpace = OutputSpace.ENGINE_SRGB)).toParams()
                 val cube = engine.bakeCubeLut(params, SIZE)
                 val table = (parseCube(cube, SIZE) ?: return null).also { OutputSpace.convertTable(it, ourSpace) }
-                Look(table, SIZE, gainFor(engine, r), key)
+                // With the film levelling turned off, the camera's own exposure is the exposure:
+                // the preview applies no gain of its own.
+                Look(table, SIZE, if (r.autoExposure) gainFor(engine, r) else 1f, key)
             }
             Log.i("Latent", "look baked for ${recipe.film} in ${(System.nanoTime() - t0) / 1_000_000} ms (gain ${"%.2f".format(look.gain)})")
             cached = look
@@ -104,7 +118,7 @@ object LookBaker {
         r.film, r.paper, r.exposureEv, r.pushStops, r.filmContrast, r.printExposure, r.printContrast,
         r.yFilterShift, r.mFilterShift, r.yFilterNeutral, r.mFilterNeutral, r.preflash,
         r.dir, r.dirAmount, r.dirSameLayer, r.dirInterLayer,
-        r.scanFilm, r.unsharpAmount, r.whiteCorrection, r.blackCorrection,
+        r.scanFilm, r.autoExposure, r.unsharpAmount, r.whiteCorrection, r.blackCorrection,
         r.filterUvAmount, r.filterUvNm, r.filterUvWidth,
         r.filterIrAmount, r.filterIrNm, r.filterIrWidth,
         r.meteringMethod, r.hanatosWindow, r.hanatosSurface,

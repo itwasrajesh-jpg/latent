@@ -40,6 +40,12 @@ data class AppSettings(
     val preset: String = "portra400_endura_wedding",  // the authored look; carries per-stock grain etc.
     val autoDevelop: Boolean = true,         // develop single shots in the background (never bursts)
     val filmPreview: Boolean = true,         // draw the viewfinder ourselves so the film look can be shown
+    /**
+     * When false (the default), the camera decides brightness: what you expose is what you see
+     * and what develops. When true, the engine levels every shot to its own target, which
+     * cancels out the EV dial.
+     */
+    val engineAutoExposure: Boolean = false,
 ) {
     companion object {
         const val ANTIBANDING_OFF = 0
@@ -72,6 +78,7 @@ data class AppSettings(
                 preset = p.getString("preset", "portra400_endura_wedding") ?: "portra400_endura_wedding",
                 autoDevelop = p.getBoolean("autoDevelop", true),
                 filmPreview = p.getBoolean("filmPreview", true),
+                engineAutoExposure = p.getBoolean("engineAutoExposure", false),
             )
         }
 
@@ -97,6 +104,7 @@ data class AppSettings(
                 .putString("preset", s.preset)
                 .putBoolean("autoDevelop", s.autoDevelop)
                 .putBoolean("filmPreview", s.filmPreview)
+                .putBoolean("engineAutoExposure", s.engineAutoExposure)
                 .apply()
         }
     }

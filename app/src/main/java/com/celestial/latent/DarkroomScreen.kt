@@ -76,7 +76,8 @@ private val DIFFUSION_FAMILIES = listOf("glimmerglass", "black_pro_mist", "pro_m
 @Composable
 fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged: (Recipe) -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current
-    var recipe by remember { mutableStateOf(initial) }
+    // Opened at the brightness it was shot: the film does not re-level it here either.
+    var recipe by remember { mutableStateOf(initial.copy(autoExposure = false)) }
     var full by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<Bitmap?>(null) }
     var original by remember { mutableStateOf<Bitmap?>(null) }
@@ -90,6 +91,7 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
     var previewIsPartial by remember { mutableStateOf(false) }
     var gpuTest by remember { mutableStateOf("") }
     var lookId by remember { mutableStateOf("") }
+    var levelling by remember { mutableStateOf(false) }
     var fullStarted by remember { mutableStateOf(0L) }
     var elapsed by remember { mutableStateOf(0) }
     var lastRenderMs by remember { mutableStateOf(0) }
@@ -277,6 +279,35 @@ fun DarkroomScreen(source: Uri, isRaw: Boolean, initial: Recipe, onRecipeChanged
                     "film" -> {
                         com.celestial.latent.develop.Presets.byId(context, lookId)?.let { p -> Note(p.description) }
                         S("Exposure", recipe.exposureEv, -3f, 3f, "%+.1f EV") { set { copy(exposureEv = it) } }
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // The photo opens at the brightness it was shot at. This asks the film
+                            // what it would have chosen — a starting point, not a correction.
+                            Text(if (levelling) "levelling…" else "Auto level", color = LatentColors.AmberInk, fontSize = 11.sp,
+                                modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Amber)
+                                    .combinedClickable(onClick = {
+                                        if (!levelling && !rendering) {
+                                            Haptics.tick(context); levelling = true
+                                            Thread {
+                                                try {
+                                                val s0 = src
+                                                val suggested = if (s0 != null) com.celestial.latent.develop.LookBaker.gainForSource(context, recipe, s0) else 0f
+                                                if (suggested > 0.01f) {
+                                                    // A gain becomes an exposure offset in stops. Only the
+                                                    // difference is applied, against whatever the recipe is
+                                                    // when it lands — a slider moved meanwhile is not lost.
+                                                    val ev = (Math.log(suggested.toDouble()) / Math.log(2.0)).toFloat()
+                                                    recipe = recipe.copy(exposureEv = (recipe.exposureEv + ev).coerceIn(-3f, 3f))
+                                                }
+                                                } finally { levelling = false }
+                                            }.start()
+                                        }
+                                    }).padding(horizontal = 12.dp, vertical = 7.dp))
+                            Text("Reset to shot", color = LatentColors.Text, fontSize = 11.sp,
+                                modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(LatentColors.Surface)
+                                    .combinedClickable(onClick = { Haptics.tick(context); recipe = recipe.copy(exposureEv = 0f) })
+                                    .padding(horizontal = 12.dp, vertical = 7.dp))
+                        }
+                        Note("The photo opens at the brightness you shot it. Auto level asks the film what it would have chosen; the slider is yours either way.")
                         S("Push / pull", recipe.pushStops, -2f, 3f, "%+.1f stop") { set { copy(pushStops = it) } }
                         S("Film contrast", recipe.filmContrast, 0.6f, 1.6f, "%.2f") { set { copy(filmContrast = it) } }
                         Head("COLOUR NOISE", null) {}

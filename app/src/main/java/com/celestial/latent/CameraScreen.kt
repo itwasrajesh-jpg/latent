@@ -136,7 +136,12 @@ fun CameraScreen(
                 }.getOrNull().orEmpty()
                 if (name.endsWith(".dng", true)) lastRawUri = uri
                 if (settings.autoDevelop && name.endsWith(".dng", true) && !name.contains("BURST") && !name.contains("STACK")) {
-                    DevelopQueue.submit(context, DevelopQueue.Job(uri, com.celestial.latent.develop.Recipes.current(context), isRaw = true))
+                    DevelopQueue.submit(context, DevelopQueue.Job(
+                        uri,
+                        // The camera's exposure is the exposure: the film does not re-level it.
+                        com.celestial.latent.develop.Recipes.current(context).copy(autoExposure = settings.engineAutoExposure),
+                        isRaw = true,
+                    ))
                 }
             },
         )
@@ -199,6 +204,7 @@ fun CameraScreen(
         baking = true
         withContext(Dispatchers.Default) {
             val recipe = com.celestial.latent.develop.Recipes.current(context)
+                .copy(autoExposure = settings.engineAutoExposure)
             val look = com.celestial.latent.develop.LookBaker.bake(context, recipe)
             if (look != null) {
                 view.setExposureGain(look.gain)
@@ -212,10 +218,11 @@ fun CameraScreen(
         baking = false
     }
 
-    // Meter the actual scene every couple of seconds, so the live view follows the light
-    // instead of sitting at one fixed brightness.
-    LaunchedEffect(lookReady, settings.filmPreview) {
-        if (!settings.filmPreview) return@LaunchedEffect
+    // Scene metering only makes sense when the film is allowed to level the exposure. With the
+    // camera in charge (the default) the preview keeps the look's own gain, so what you expose
+    // is what you see.
+    LaunchedEffect(lookReady, settings.filmPreview, settings.engineAutoExposure) {
+        if (!settings.filmPreview || !settings.engineAutoExposure) return@LaunchedEffect
         var metering = false
         while (lookReady) {
             val view = glPreview
