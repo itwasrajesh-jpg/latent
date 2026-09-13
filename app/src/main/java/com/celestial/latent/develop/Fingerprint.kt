@@ -41,12 +41,6 @@ data class Fingerprint(
      */
     val neutralWarmth: Float,
     val neutralGreen: Float,
-    /**
-     * False when the picture had nothing neutral enough to judge — a sunset, say. Zero would
-     * otherwise read as "perfectly neutral", which is the opposite of "unknown", and with the
-     * heaviest weight in the list that would drag the fit towards grey for no reason.
-     */
-    val neutralsFound: Boolean = true,
     /** Colour cast in the shadows and in the highlights: the crossover that names a film. */
     val shadowWarmth: Float,
     val shadowGreen: Float,
@@ -60,6 +54,15 @@ data class Fingerprint(
     val skinSaturation: Float,
     val foliageHue: Float,
     val foliageSaturation: Float,
+    /**
+     * False when the picture had nothing neutral enough to judge — a sunset, say. Zero would
+     * otherwise read as "perfectly neutral", which is the opposite of "unknown", and with the
+     * heaviest weight in the list that would drag the fit towards grey for no reason.
+     *
+     * Declared last, and deliberately: the values above are constructed positionally, so a
+     * non-number in the middle of them silently shifts every value that follows.
+     */
+    val neutralsFound: Boolean = true,
 ) {
 
     fun asList() = listOf(
