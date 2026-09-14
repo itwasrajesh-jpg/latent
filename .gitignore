@@ -4,10 +4,11 @@ local.properties
 .idea/
 *.iml
 .DS_Store
-# Real release keys must never be committed. The committed debug.keystore is intentional.
+# Signing keys must never be committed.
 *.jks
-release.keystore
-
+*.keystore
+*.p12
+*.pfx
 # Fetched at build time from the pinned spektrafilm mirror — never commit these.
 engine/
 lib/
