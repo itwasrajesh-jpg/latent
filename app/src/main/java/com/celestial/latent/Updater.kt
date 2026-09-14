@@ -82,8 +82,7 @@ object Updater {
         when {
             url.isBlank() -> State.Failed("the newest release has no APK attached")
             isNewer(version, current) -> State.Available(Release(version, json.optString("body"), url, size))
-            parts(version).size != parts(current).size || parts(version).isEmpty() ->
-                State.Unclear(tag, current)
+            !comparable(version, current) -> State.Unclear(tag, current)
             else -> State.UpToDate(current)
         }
         } catch (t: Throwable) {
@@ -99,13 +98,18 @@ object Updater {
      * Compares two version strings a piece at a time, so 0.1.100 is correctly newer than
      * 0.1.99 — comparing them as text would say otherwise.
      */
+    /**
+     * The build workflow tags a release with just the build number — "v110" — while the app
+     * reports "0.1.110": the same number, last. So a single-number tag is compared with the
+     * last part of the version. Tags in full dotted form are compared part by part. Anything
+     * else cannot be compared honestly and is reported rather than guessed at.
+     */
     fun isNewer(candidate: String, current: String): Boolean {
         val a = parts(candidate)
         val b = parts(current)
-        // A tag that is not in the same form as the app's version cannot be compared honestly —
-        // a bare "99" would otherwise look newer than "0.1.100", because its first number is
-        // larger. When the shapes differ, say no rather than offering an update that is not one.
-        if (a.isEmpty() || b.isEmpty() || a.size != b.size) {
+        if (a.isEmpty() || b.isEmpty()) return false
+        if (a.size == 1 && b.size > 1) return a[0] > b.last()
+        if (a.size != b.size) {
             Log.w("Latent", "update: cannot compare '$candidate' with '$current' — different forms")
             return false
         }
@@ -113,6 +117,12 @@ object Updater {
             if (a[i] != b[i]) return a[i] > b[i]
         }
         return false
+    }
+
+    /** True when the two forms can be compared at all — see [isNewer]. */
+    fun comparable(candidate: String, current: String): Boolean {
+        val a = parts(candidate); val b = parts(current)
+        return a.isNotEmpty() && b.isNotEmpty() && (a.size == b.size || (a.size == 1 && b.size > 1))
     }
 
     private fun parts(v: String): List<Int> =
