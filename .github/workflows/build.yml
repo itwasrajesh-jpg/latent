@@ -34,10 +34,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - name: Show release keystore alias
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-        run: keytool -list -keystore "$RUNNER_TEMP/latent-release.p12" -storetype PKCS12 -storepass "$KEYSTORE_PASSWORD"
       - uses: android-actions/setup-android@v3
       - run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
       - uses: gradle/actions/setup-gradle@v4
