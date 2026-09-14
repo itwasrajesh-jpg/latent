@@ -81,8 +81,12 @@ data class Fingerprint(
      * eye: the colour crossover and the skin behaviour carry a look more than the exact black
      * point does. 0 is identical; around 1 is "not the same look at all".
      */
-    fun distanceTo(other: Fingerprint): Float {
-        val a = asList(); val b = other.asList()
+    /**
+     * How far this fingerprint — a CANDIDATE — is from a REFERENCE. The order matters: the
+     * reference decides which figures are compared, so the two are not interchangeable.
+     */
+    fun distanceTo(reference: Fingerprint, judgeable: FloatArray? = null): Float {
+        val a = asList(); val b = reference.asList()
         var sum = 0f
         var used = 0f
         for (i in a.indices) {
@@ -92,9 +96,15 @@ data class Fingerprint(
             // heavily they are weighted. Measured: desaturating by a third moved the distance
             // 0.010 before and 0.057 after, while brightness (which is levelled anyway) fell
             // from 0.045 to 0.042 and is now the least influential, as it should be.
-            // Only what both pictures can show. A figure one of them had no evidence for
-            // contributes nothing, rather than contributing noise.
-            val shared = min(coverage.getOrElse(i) { 1f }, other.coverage.getOrElse(i) { 1f })
+            // Only what the REFERENCE can show. Using the smaller of the two coverages was a
+            // bug: a candidate that destroyed the skin — pushed it out of the skin hue range —
+            // shrank its own skin coverage, dropped the skin figures from the comparison, and
+            // was rewarded for losing the very evidence it was being judged on. The reference
+            // decides what is compared; the candidate is always judged on those regions.
+            // What can be judged is fixed BEFORE any attempt: what the reference shows, and what
+            // the undeveloped test shot can show. Never the candidate's own coverage — that is
+            // how a candidate that destroyed the skin was scored as perfect.
+            val shared = judgeable?.getOrElse(i) { 1f } ?: reference.coverage.getOrElse(i) { 1f }
             if (shared <= 0.001f) continue
             val w = WEIGHTS[i] * sqrt(shared)
             used += w * w
@@ -145,6 +155,12 @@ data class Fingerprint(
             2.0f, 2.0f, 1.2f, 1.4f,            // skin most of all, then foliage
         )
 
+        /** What can fairly be judged between a reference and an undeveloped test shot. */
+        fun judgeable(reference: Fingerprint, testShot: Fingerprint): FloatArray =
+            FloatArray(LABELS.size) { i ->
+                min(reference.coverage.getOrElse(i) { 1f }, testShot.coverage.getOrElse(i) { 1f })
+            }
+
         /** Averages a set of fingerprints — how a reference set becomes one target. */
         fun average(list: List<Fingerprint>): Fingerprint {
             require(list.isNotEmpty())
@@ -164,6 +180,7 @@ data class Fingerprint(
         fun spread(list: List<Fingerprint>): Float {
             if (list.size < 2) return 0f
             val mean = average(list)
+            // Each image against the set's mean, with the mean as the reference.
             return list.map { it.distanceTo(mean) }.average().toFloat()
         }
 

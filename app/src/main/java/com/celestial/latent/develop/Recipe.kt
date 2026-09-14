@@ -387,6 +387,13 @@ object Recipes {
     fun load(ctx: Context, name: String): Recipe? = prefs(ctx).getString(name, null)?.let { Recipe.fromJson(it) }
     fun delete(ctx: Context, name: String) = prefs(ctx).edit().remove(name).apply()
 
+    /** Removes a built film entirely: its recipe and the profile the engine reads. */
+    fun deleteStock(ctx: Context, name: String) {
+        val r = load(ctx, name)
+        delete(ctx, name)
+        r?.let { EngineAssets.profileFile(it.film)?.delete() }
+    }
+
     /**
      * The films Latent has built, newest first.
      *

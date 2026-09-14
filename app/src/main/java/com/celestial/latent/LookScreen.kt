@@ -164,6 +164,9 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
     // Naming is the user's, not the app's: a stock called "Celestial 17" tells you nothing and
     // was invented without asking.
     var stockName by remember { mutableStateOf("") }
+    // Bumped on save and delete so the list of built films re-reads.
+    var stocksRevision by remember { mutableStateOf(0) }
+    var confirmDelete by remember { mutableStateOf<String?>(null) }
 
     /** Re-develops the test shot with the fit's emulsion plus whatever has been adjusted. */
     // What the references say about grain, halation, bloom and glare. Declared here rather than
@@ -258,6 +261,36 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
             Text("‹", color = LatentColors.Text, fontSize = 20.sp, modifier = Modifier.combinedClickable(onClick = onBack).padding(horizontal = 8.dp))
         }
 
+        // The films built so far, with a way to remove one. Deleting is two taps, so a slip
+        // cannot lose a film it took minutes to build.
+        val stocks = remember(stocksRevision) { com.celestial.latent.develop.Recipes.stocks(context) }
+        if (stocks.isNotEmpty()) {
+            Section("YOUR FILMS")
+            stocks.forEach { (name, _) ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(name, color = LatentColors.Text, fontSize = 12.sp)
+                    if (confirmDelete == name) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("delete", color = LatentColors.Amber, fontSize = 11.sp,
+                                modifier = Modifier.combinedClickable(onClick = {
+                                    Haptics.click(context)
+                                    com.celestial.latent.develop.Recipes.deleteStock(context, name)
+                                    confirmDelete = null
+                                    stocksRevision++
+                                    saved = "deleted $name"
+                                }).padding(4.dp))
+                            Text("keep", color = LatentColors.TextDim, fontSize = 11.sp,
+                                modifier = Modifier.combinedClickable(onClick = { confirmDelete = null }).padding(4.dp))
+                        }
+                    } else {
+                        Text("remove", color = LatentColors.TextDim, fontSize = 11.sp,
+                            modifier = Modifier.combinedClickable(onClick = { Haptics.tick(context); confirmDelete = name }).padding(4.dp))
+                    }
+                }
+            }
+            Spacer(Modifier.height(18.dp))
+        }
+
         Section("1 · REFERENCES")
         Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             references.take(3).forEach { (uri, _) ->
@@ -316,9 +349,9 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
         val shared = remember(references, testFingerprint) {
             val ref = if (references.isEmpty()) null else Fingerprint.average(references.map { it.second })
             val shot = testFingerprint
-            if (ref == null || shot == null) emptyList() else Fingerprint.LABELS.indices.mapNotNull { i ->
-                val c = minOf(ref.coverage.getOrElse(i) { 1f }, shot.coverage.getOrElse(i) { 1f })
-                if (c > 0.01f) Fingerprint.LABELS[i] else null
+            if (ref == null || shot == null) emptyList() else {
+                val j = Fingerprint.judgeable(ref, shot)
+                Fingerprint.LABELS.indices.mapNotNull { i -> if (j[i] > 0.01f) Fingerprint.LABELS[i] else null }
             }
         }
 
@@ -500,12 +533,28 @@ fun LookScreen(settings: AppSettings, onBack: () -> Unit) {
                             id, best, paper, tweak, texture,
                         )
                         com.celestial.latent.develop.Recipes.save(context, name, recipe)
+                        Haptics.click(context)
+                        stockName = ""
+                        stocksRevision++
                         "saved as $name — it is at the start of the film strip"
                     }
                     }
                 }
             }
-            if (saved.isNotEmpty()) Text(saved, color = LatentColors.Amber, fontSize = 11.sp, modifier = Modifier.padding(bottom = 20.dp))
+            if (saved.isNotEmpty()) {
+                Column(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                        .background(if (saved.startsWith("saved")) LatentColors.Amber else LatentColors.Surface)
+                        .padding(13.dp),
+                ) {
+                    Text(
+                        saved,
+                        color = if (saved.startsWith("saved")) LatentColors.AmberInk else LatentColors.Text,
+                        fontSize = 12.sp,
+                    )
+                }
+                Spacer(Modifier.height(20.dp))
+            }
         }
     }
 }

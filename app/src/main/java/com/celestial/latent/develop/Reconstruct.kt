@@ -87,6 +87,9 @@ object Reconstruct {
         var temperature = 1f
         val random = Random(1)
 
+        // Filled in once the helpers below exist; read by every evaluation.
+        var judgeable: FloatArray? = null
+
         /** Develops one candidate and returns what it measures, without scoring it. */
         fun evaluateFingerprint(shape: Emulsion.Shape): Fingerprint? {
             Emulsion.write(base, shape, stockId, "Working") ?: return null
@@ -132,7 +135,7 @@ object Reconstruct {
                     val (bytes, _) = Develop.renderWith(engine, context, source, recipe, preview = true)
                     val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@runCatching null
                     val fp = Fingerprint.of(bmp)
-                    Attempt(shape, fp.distanceTo(target), if (keepImage) bytes else null, baseEv)
+                    Attempt(shape, fp.distanceTo(target, judgeable), if (keepImage) bytes else null, baseEv)
                 }
             }.getOrNull()
         }
@@ -160,6 +163,11 @@ object Reconstruct {
             Log.i("Latent", "filter directions: yellow $yellowDirection, magenta $magentaDirection")
             onProgress(Progress(0, rounds, null, "measured how the filters move the colour"))
         }
+
+        // What can be judged: what the references show AND what the undeveloped test shot can
+        // show, fixed now. Measured on the test shot developed as plainly as possible, so
+        // regions that exist in it count, and ones that do not are not held against the fit.
+        judgeable = evaluateFingerprint(Emulsion.Shape())?.let { Fingerprint.judgeable(target, it) }
 
         val start = evaluate(current, keepImage = true)
         if (start == null) {
