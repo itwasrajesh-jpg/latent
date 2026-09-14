@@ -4,7 +4,6 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// Build number comes from GitHub Actions (-PbuildNumber=<run number>); 1 when built by hand.
 val buildNumber: Int = (project.findProperty("buildNumber") as String?)?.toIntOrNull() ?: 1
 
 android {
@@ -17,28 +16,22 @@ android {
         targetSdk = 35
         versionCode = buildNumber
         versionName = "0.1.$buildNumber"
-        // The film engine ships native code; arm64 covers every phone we target.
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
     signingConfigs {
-        // Fixed, committed debug key: every CI build installs over the previous one.
-        // Same approach as the Expo template used by the other Celestial apps.
-        create("committedDebug") {
-            storeFile = rootProject.file("debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        create("release") {
+            storeFile = file(requireNotNull(System.getenv("KEYSTORE_PATH")))
+            storePassword = requireNotNull(System.getenv("KEYSTORE_PASSWORD"))
+            keyAlias = requireNotNull(System.getenv("KEY_ALIAS"))
+            keyPassword = requireNotNull(System.getenv("KEY_PASSWORD"))
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("committedDebug")
-        }
-        debug {
-            signingConfig = signingConfigs.getByName("committedDebug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -52,18 +45,12 @@ android {
         compose = true
         buildConfig = true
     }
-
 }
 
 dependencies {
-    // Film engine + RAW decoder, fetched by the build workflow from the pinned mirror (GPLv3 / LGPL).
     implementation(project(":engine:spektra-core"))
     implementation(project(":lib:libraw"))
-
-    // JTransforms (BSD): the FFT behind Latent's diffusion filter, so a kernel hundreds of
-    // pixels wide costs the same as a small one. Pure Java — no extra native build.
     implementation("com.github.wendykierp:JTransforms:3.1")
-
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
