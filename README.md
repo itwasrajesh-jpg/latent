@@ -58,7 +58,7 @@ screen. Any local change to the engine is documented in that mirror's NOTICE.
 
 Builds are manual: **Actions → Build Latent APK → Run workflow**. The result is an APK
 attached to a GitHub Release; install it over the previous build (the committed
-`debug.keystore` keeps updates in place). The first build after an engine change compiles
+`private release signing key` keeps updates in place). The first build after an engine change compiles
 C++ via the NDK and takes 10–15 minutes; later builds are cached.
 
 Code arrives as zip bundles: upload one to the repository root or `drop/`, and
