@@ -34,8 +34,17 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
+      # The SDK is already on the runner. The setup-android action used here before began
+      # failing while accepting licences — it printed an entire agreement and stopped — so
+      # the runner's own sdkmanager is used directly, with licences accepted first.
+      - name: Android SDK components
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKM" || SDKM="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -1)"
+          echo "using $SDKM"
+          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          "$SDKM" --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1" > /dev/null
+          echo "installed:"; "$SDKM" --list_installed | grep -E "ndk;|cmake;|android-35|35.0.0" || true
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14.3'
