@@ -7,6 +7,10 @@ enlarger, and a scan.
 Built and tested on a Xiaomi 15 Ultra; developed entirely from a phone via the GitHub
 web editor and GitHub Actions.
 
+## Community
+
+Questions, feedback, shots: https://discord.gg/HfCeunz8Cs
+
 ## Attribution
 
 > **Spektrafilm for Android** by Akshay Sharma — https://github.com/thetechgeekko/Spektrafilm-android
