@@ -55,6 +55,15 @@ fun AboutScreen(onBack: () -> Unit) {
         Text("Latent by Celestial —", color = LatentColors.TextBright, fontSize = 14.sp, lineHeight = 19.sp)
         Link("https://github.com/itwasrajesh-jpg/latent") { open(it) }
         Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(18.dp))
+        Text("TALK TO US", color = LatentColors.TextDim, fontSize = 10.sp, letterSpacing = 2.sp)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Questions, feedback, or a shot you're proud of — the Discord is where it happens.",
+            color = LatentColors.TextBright, fontSize = 14.sp, lineHeight = 19.sp,
+        )
+        Link("https://discord.gg/HfCeunz8Cs") { open(it) }
+        Spacer(Modifier.height(18.dp))
         Text(
             "All three notices must be kept in any distribution of Latent or of a work derived from it.",
             color = LatentColors.TextDim, fontSize = 12.sp, lineHeight = 17.sp,

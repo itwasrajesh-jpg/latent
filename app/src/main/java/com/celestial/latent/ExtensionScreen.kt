@@ -211,6 +211,18 @@ class ExtensionCamera(private val context: android.content.Context, private val 
                     val cfg = ExtensionSessionConfiguration(extension, listOf(OutputConfiguration(surface), OutputConfiguration(r.surface)), executor,
                         object : CameraExtensionSession.StateCallback() {
                             override fun onConfigured(s: CameraExtensionSession) {
+                                // What this extension will honour. If a key is not in this
+                                // list, setting it is silently ignored — so this is the direct
+                                // answer to whether the in-sensor zoom can be engaged here.
+                                if (Build.VERSION.SDK_INT >= 33) runCatching {
+                                    val chars = cm.getCameraExtensionCharacteristics(cameraId)
+                                    val reqKeys = chars.getAvailableCaptureRequestKeys(extension).map { it.name }
+                                    val resKeys = chars.getAvailableCaptureResultKeys(extension).map { it.name }
+                                    android.util.Log.i("Latent", "extension ${extName(extension)} accepts ${reqKeys.size} request keys: " + reqKeys.joinToString(", "))
+                                    android.util.Log.i("Latent", "extension ${extName(extension)} reports ${resKeys.size} result keys: " + resKeys.joinToString(", "))
+                                    val vendor = reqKeys.filter { it.contains("xiaomi", true) || it.contains("codeaurora", true) || it.contains("sensor", true) }
+                                    android.util.Log.i("Latent", "extension vendor/sensor request keys: " + (vendor.ifEmpty { listOf("NONE — vendor tags are not honoured in this mode") }).joinToString(", "))
+                                }.onFailure { android.util.Log.w("Latent", "could not list extension keys: ${it.message}") }
                                 session = s
                                 try {
                                     val req = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(surface); applyAllowed(this) }
@@ -236,6 +248,23 @@ class ExtensionCamera(private val context: android.content.Context, private val 
             s.capture(req.build(), executor, object : CameraExtensionSession.ExtensionCaptureCallback() {
                 override fun onCaptureFailed(sess: CameraExtensionSession, request: CaptureRequest) { onStatus("capture failed") }
                 override fun onCaptureProcessStarted(sess: CameraExtensionSession, request: CaptureRequest) { onStatus("Processing…") }
+                // What was actually applied, as the driver reports it. Compare the crop region
+                // and focal length here with a normal RAW-path ×2 shot: if the in-sensor mode
+                // engaged, the sensor crop region shrinks; a digital crop leaves it full-size.
+                override fun onCaptureResultAvailable(sess: CameraExtensionSession, request: CaptureRequest, result: android.hardware.camera2.TotalCaptureResult) {
+                    runCatching {
+                        val crop = result.get(android.hardware.camera2.CaptureResult.SCALER_CROP_REGION)
+                        val focal = result.get(android.hardware.camera2.CaptureResult.LENS_FOCAL_LENGTH)
+                        val zoomApplied = result.get(android.hardware.camera2.CaptureResult.CONTROL_ZOOM_RATIO)
+                        val physical = runCatching { result.get(android.hardware.camera2.CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) }.getOrNull()
+                        android.util.Log.i("Latent", "extension result: crop=$crop focal=$focal zoomApplied=$zoomApplied physical=$physical")
+                        val vendorInResult = result.keys.map { it.name }.filter { it.contains("xiaomi", true) || it.contains("codeaurora", true) || it.contains("sensor", true) }
+                        vendorInResult.forEach { name ->
+                            val v = result.keys.firstOrNull { it.name == name }?.let { k -> runCatching { result.get(k) }.getOrNull() }
+                            android.util.Log.i("Latent", "extension result vendor: $name = ${v?.let { if (it is IntArray) it.joinToString(",") else if (it is ByteArray) it.joinToString(",") else it.toString() }}")
+                        }
+                    }.onFailure { android.util.Log.w("Latent", "could not read extension result: ${it.message}") }
+                }
             })
         } catch (e: Exception) { onStatus("capture: ${e.message}") }
     }
