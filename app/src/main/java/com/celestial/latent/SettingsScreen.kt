@@ -22,6 +22,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
@@ -129,6 +130,22 @@ private fun UpdateRow() {
     var state by remember { mutableStateOf<Updater.State>(Updater.State.Idle) }
     val version = remember { Updater.currentVersion(context) }
 
+    // While a download is running, watch it. Android's download manager owns the transfer,
+    // so this only polls its status rather than moving bytes itself.
+    LaunchedEffect(state) {
+        val s = state
+        if (s is Updater.State.Downloading) {
+            while (true) {
+                kotlinx.coroutines.delay(800)
+                when (Updater.downloadStatus(context, s.id)) {
+                    android.app.DownloadManager.STATUS_SUCCESSFUL -> { state = Updater.State.ReadyToInstall(s.id); break }
+                    android.app.DownloadManager.STATUS_FAILED -> { state = Updater.State.Failed("the download did not finish"); break }
+                    else -> {}
+                }
+            }
+        }
+    }
+
     Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -141,8 +158,8 @@ private fun UpdateRow() {
                         is Updater.State.Unclear -> "latest release is tagged ${s.tag}; this build is ${s.current} — cannot tell which is newer"
                         is Updater.State.Available -> "version ${s.release.version} is available" +
                             (if (s.release.sizeBytes > 0) " · ${s.release.sizeBytes / 1024 / 1024} MB" else "")
-                        is Updater.State.Downloading -> "downloading… ${s.percent}%"
-                        is Updater.State.ReadyToInstall -> "ready to install"
+                        is Updater.State.Downloading -> "downloading — see the notification"
+                        is Updater.State.ReadyToInstall -> "downloaded — open Downloads and tap the file to install"
                         is Updater.State.Failed -> s.reason
                     },
                     color = if (state is Updater.State.Failed) LatentColors.Text else LatentColors.TextDim,
@@ -152,7 +169,7 @@ private fun UpdateRow() {
             }
             val label = when (state) {
                 is Updater.State.Available -> "download"
-                is Updater.State.ReadyToInstall -> "install"
+                is Updater.State.ReadyToInstall -> "open"
                 is Updater.State.Checking, is Updater.State.Downloading -> "…"
                 else -> "check"
             }
@@ -163,18 +180,10 @@ private fun UpdateRow() {
                         Haptics.tick(context)
                         when (val s = state) {
                             is Updater.State.Available -> {
-                                state = Updater.State.Downloading(0)
-                                Thread {
-                                    val file = Updater.download(context, s.release) { p -> state = Updater.State.Downloading(p) }
-                                    state = if (file == null) Updater.State.Failed("the download did not finish")
-                                    else Updater.State.ReadyToInstall(file)
-                                }.start()
+                                val id = Updater.download(context, s.release)
+                                state = if (id == null) Updater.State.Failed("could not start the download") else Updater.State.Downloading(id)
                             }
-                            is Updater.State.ReadyToInstall -> {
-                                // Android needs permission to install at all; it is asked once.
-                                if (!Updater.canInstall(context)) Updater.requestInstallPermission(context)
-                                else Updater.install(context, s.file)
-                            }
+                            is Updater.State.ReadyToInstall -> Updater.openDownloads(context)
                             is Updater.State.Checking, is Updater.State.Downloading -> {}
                             else -> {
                                 state = Updater.State.Checking
@@ -184,9 +193,9 @@ private fun UpdateRow() {
                     }).padding(horizontal = 14.dp, vertical = 8.dp),
             )
         }
-        if (state is Updater.State.ReadyToInstall && !Updater.canInstall(context)) {
+        if (state is Updater.State.ReadyToInstall) {
             Text(
-                "Android will ask you to allow Latent to install apps — it only needs this once.",
+                "Installing from Downloads means Latent never needs permission to install apps — which is what was making Play Protect insist on a scan.",
                 color = LatentColors.TextDim, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp),
             )
         }

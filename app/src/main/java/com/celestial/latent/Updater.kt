@@ -6,9 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import android.util.Log
-import androidx.core.content.FileProvider
 import org.json.JSONObject
-import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -36,8 +34,8 @@ object Updater {
         /** The release exists but its tag cannot be compared with the running version. */
         data class Unclear(val tag: String, val current: String) : State
         data class Available(val release: Release) : State
-        data class Downloading(val percent: Int) : State
-        data class ReadyToInstall(val file: File) : State
+        data class Downloading(val id: Long) : State
+        data class ReadyToInstall(val id: Long) : State
         data class Failed(val reason: String) : State
     }
 
@@ -129,67 +127,42 @@ object Updater {
         v.trim().trimStart('v', 'V').split('.', '-', '_')
             .mapNotNull { p -> p.takeWhile { it.isDigit() }.toIntOrNull() }
 
-    /** Downloads the APK, reporting progress. Returns the file, or null if it failed. */
-    fun download(context: Context, release: Release, onProgress: (Int) -> Unit): File? {
-        var conn: HttpURLConnection? = null
-        return try {
-        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-        dir.listFiles()?.forEach { it.delete() }
-        val out = File(dir, "latent-${release.version}.apk")
-        val c = (URL(release.apkUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15_000
-            readTimeout = 30_000
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Latent")
-        }
-        conn = c
-        val total = if (release.sizeBytes > 0) release.sizeBytes else c.contentLengthLong
-        c.inputStream.use { input ->
-            out.outputStream().use { output ->
-                val buffer = ByteArray(64 * 1024)
-                var written = 0L
-                var last = -1
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    output.write(buffer, 0, read)
-                    written += read
-                    if (total > 0) {
-                        val pct = (written * 100 / total).toInt()
-                        if (pct != last) { last = pct; onProgress(pct) }
-                    }
-                }
-            }
-        }
-        Log.i("Latent", "update downloaded: ${out.length() / 1024} KB")
-        out
-        } catch (t: Throwable) {
-            Log.e("Latent", "update download failed", t)
-            null
-        } finally {
-            conn?.disconnect()
+    /**
+     * Hands the APK to Android's own download manager, which shows its progress in the
+     * notification shade and keeps the file in Downloads.
+     *
+     * Deliberately not downloaded by this app and installed by this app: doing that needs the
+     * permission to install packages, and Play Protect treats any app holding it as a risk —
+     * insisting on a scan at every install. Installing from Downloads is the same install,
+     * without that permission.
+     *
+     * @return the download id, or null if it could not be queued.
+     */
+    fun download(context: Context, release: Release): Long? = try {
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val name = "latent-${release.version}.apk"
+        val request = DownloadManager.Request(Uri.parse(release.apkUrl))
+            .setTitle("Latent ${release.version}")
+            .setDescription("Tap when finished to install")
+            .setMimeType("application/vnd.android.package-archive")
+            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
+        dm.enqueue(request)
+    } catch (t: Throwable) {
+        Log.e("Latent", "could not queue the update download", t); null
+    }
+
+    /** Whether a queued download has finished, failed, or is still going. */
+    fun downloadStatus(context: Context, id: Long): Int {
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        dm.query(DownloadManager.Query().setFilterById(id)).use { c ->
+            if (!c.moveToFirst()) return DownloadManager.STATUS_FAILED
+            return c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
         }
     }
 
-    /** Hands the APK to Android's installer, which asks the user before doing anything. */
-    fun install(context: Context, apk: File) {
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", apk)
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(intent)
-    }
-
-    /** Whether Android will let the app install a package at all; the user grants this once. */
-    fun canInstall(context: Context): Boolean =
-        context.packageManager.canRequestPackageInstalls()
-
-    fun requestInstallPermission(context: Context) {
-        context.startActivity(
-            Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
-                .setData(Uri.parse("package:${context.packageName}"))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
+    /** Opens Android's Downloads, where a tap on the APK brings up the system installer. */
+    fun openDownloads(context: Context) {
+        context.startActivity(Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 }
